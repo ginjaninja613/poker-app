@@ -1,61 +1,47 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import api from "./api";
 
-const API_URL = 'http://192.168.0.178:5000/api/auth';
-
-// Small helper to safely parse JSON (prevents crashes on bad responses)
-const parseJson = async (res) => {
-  const text = await res.text();
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error('Server returned invalid JSON');
-  }
-};
-
-export async function login(email, password) {
-  const res = await fetch(`${API_URL}/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-
-  const data = await parseJson(res);
-  if (!res.ok) throw new Error(data?.error || `Login failed (${res.status})`);
-
-  await AsyncStorage.multiSet([
-    ['token', data.token],
-    ['role', data.user?.role || 'user'],
-  ]);
-
+export async function register(payload) {
+  // payload: { name, email, password, role, assignedCasinoId(s) ... }
+  const { data } = await api.post("/api/auth/register", payload);
   return data;
 }
 
-export async function register({ name, email, password, role = 'user', assignedCasinoIds = [] }) {
-  const res = await fetch(`${API_URL}/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, password, role, assignedCasinoIds }),
-  });
-
-  const data = await parseJson(res);
-  if (!res.ok) throw new Error(data?.error || `Register failed (${res.status})`);
-
-  await AsyncStorage.multiSet([
-    ['token', data.token],
-    ['role', data.user?.role || 'user'],
-  ]);
-
+export async function login(email, password) {
+  const { data } = await api.post("/api/auth/login", { email, password });
+  // expected: { token, role, assignedCasinoIds?: string[] }
+  if (data?.token) await AsyncStorage.setItem("token", data.token);
+  if (data?.role) await AsyncStorage.setItem("role", data.role);
+  if (data?.assignedCasinoIds)
+    await AsyncStorage.setItem(
+      "assignedCasinoIds",
+      JSON.stringify(data.assignedCasinoIds)
+    );
   return data;
 }
 
 export async function logout() {
-  await AsyncStorage.multiRemove(['token', 'role']);
+  await AsyncStorage.multiRemove(["token", "role", "assignedCasinoIds"]);
 }
 
 export async function getToken() {
-  return AsyncStorage.getItem('token');
+  return AsyncStorage.getItem("token");
 }
 
-export async function getUserRole() {
-  return AsyncStorage.getItem('role');
+export async function getRole() {
+  return AsyncStorage.getItem("role");
+}
+
+export async function getAssignedCasinoIds() {
+  const raw = await AsyncStorage.getItem("assignedCasinoIds");
+  try {
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function isStaffOrAdmin() {
+  const role = await getRole();
+  return role === "staff" || role === "admin";
 }

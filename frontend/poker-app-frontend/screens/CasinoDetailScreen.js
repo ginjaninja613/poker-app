@@ -1,3 +1,4 @@
+// frontend/screens/CasinoDetailScreen.js
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
@@ -19,35 +20,62 @@ export default function CasinoDetailScreen({ route, navigation }) {
   const [tournaments, setTournaments] = useState([]); // separate state (not on casino)
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
+  const [assignedIds, setAssignedIds] = useState([]); // strings from /me
+
+  const fetchCasino = async (id) => {
+    const res = await fetch(`${API_BASE}/api/casinos/${id}`);
+    const text = await res.text();
+    try {
+      return text ? JSON.parse(text) : casino;
+    } catch {
+      return casino;
+    }
+  };
+
+  const fetchTournaments = async (id) => {
+    const res = await fetch(`${API_BASE}/api/casinos/${id}/tournaments`);
+    const text = await res.text();
+    try {
+      const list = text ? JSON.parse(text) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchMe = async () => {
+    try {
+      // Fallback: read cached role (non-authoritative)
+      const cachedRole = await AsyncStorage.getItem('role');
+      if (cachedRole) setUserRole(cachedRole);
+
+      // Authoritative: ask backend who we are
+      const token = await AsyncStorage.getItem('token');
+      if (!token) return;
+      const resMe = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const me = await resMe.json();
+      if (resMe.ok && me) {
+        setUserRole(me.role || null);
+        setAssignedIds(Array.isArray(me.assignedCasinoIds) ? me.assignedCasinoIds.map(String) : []);
+      }
+    } catch {
+      // ignore — doesn't block casino/tournament load
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      // role from storage (backend still enforces permissions)
-      const role = await AsyncStorage.getItem('role');
-      setUserRole(role);
+      await fetchMe();
 
-      // fetch casino detail
-      const resCasino = await fetch(`${API_BASE}/api/casinos/${casino._id}`);
-      const textCasino = await resCasino.text();
-      try {
-        const updated = textCasino ? JSON.parse(textCasino) : casino;
-        setData(updated || casino);
-      } catch {
-        setData(casino); // fallback
-      }
+      const updated = await fetchCasino(casino._id);
+      setData(updated || casino);
 
-      // fetch tournaments for this casino
-      const resT = await fetch(`${API_BASE}/api/casinos/${casino._id}/tournaments`);
-      const textT = await resT.text();
-      try {
-        const list = textT ? JSON.parse(textT) : [];
-        setTournaments(Array.isArray(list) ? list : []);
-      } catch {
-        setTournaments([]);
-      }
+      const list = await fetchTournaments(casino._id);
+      setTournaments(list);
     } catch (err) {
-      // minimal logging; UI still renders gracefully
       console.warn('CasinoDetail load error:', err?.message);
       setTournaments([]);
     } finally {
@@ -92,7 +120,11 @@ export default function CasinoDetailScreen({ route, navigation }) {
     );
   }
 
-  const canAdd = userRole === 'staff' || userRole === 'admin';
+  const casinoIdStr = String((data && data._id) || (casino && casino._id) || '');
+  const canAdd =
+    userRole === 'admin' ||
+    (userRole === 'staff' && assignedIds.includes(casinoIdStr));
+
   const dataSafe = data || {};
   const listSafe = Array.isArray(tournaments) ? tournaments : [];
 

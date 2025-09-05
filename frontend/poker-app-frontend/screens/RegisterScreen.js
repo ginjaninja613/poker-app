@@ -1,3 +1,4 @@
+// frontend/screens/RegisterScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -6,110 +7,169 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
 } from 'react-native';
 import DropDownPicker from 'react-native-dropdown-picker';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
+
+const API_BASE = 'http://192.168.0.178:5000';
 
 export default function RegisterScreen() {
   const navigation = useNavigation();
+
+  // Form state
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState('user');
+
+  // Role & casino selection
+  const [role, setRole] = useState('user'); // 'user' | 'staff'
+  const [casinos, setCasinos] = useState([]); // [{label, value}]
+  const [selectedCasino, setSelectedCasino] = useState(null);
+
+  // DropDownPicker control
+  const [open, setOpen] = useState(false);
+
+  // UI state
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const [casinos, setCasinos] = useState([]);
-  const [open, setOpen] = useState(false);
-  const [selectedCasino, setSelectedCasino] = useState(null);
-
+  // Fetch casinos only when needed (when staff is selected and we don't have them yet)
   useEffect(() => {
     const fetchCasinos = async () => {
       try {
-        const response = await fetch('http://192.168.0.178:5000/api/casinos');
-        const data = await response.json();
-        const dropdownItems = data.map(c => ({
-          label: c.name,
-          value: c._id,
-        }));
-        setCasinos(dropdownItems);
-      } catch (err) {
-        console.error('Failed to load casinos', err.message);
+        const res = await fetch(`${API_BASE}/api/casinos`);
+        const data = await res.json();
+        const items = Array.isArray(data)
+          ? data.map(c => ({ label: c.name, value: c._id }))
+          : [];
+        setCasinos(items);
+      } catch (e) {
+        setError('Failed to load casinos. Try again or register as a user.');
       }
     };
 
-    if (role === 'staff') {
+    if (role === 'staff' && casinos.length === 0) {
       fetchCasinos();
     }
+    // Close dropdown when switching roles to avoid layout overlap
+    setOpen(false);
   }, [role]);
 
   const handleRegister = async () => {
     try {
-      const payload = {
-        email,
-        password,
-        role,
-        ...(role === 'staff' && selectedCasino ? { casinoId: selectedCasino } : {}),
+      setSubmitting(true);
+      setError('');
+      setSuccess('');
 
-      };
-      
-      console.log('📤 Registering payload:', payload);
+      const trimmedName = name.trim();
+      const trimmedEmail = email.trim();
+      const trimmedPassword = password;
 
-      const response = await fetch('http://192.168.0.178:5000/api/auth/register', {
+      if (!trimmedName || !trimmedEmail || !trimmedPassword) {
+        setError('Please fill in name, email, and password.');
+        setSubmitting(false);
+        return;
+      }
+
+      if (role === 'staff' && !selectedCasino) {
+        setError('Please select a casino to request staff access.');
+        setSubmitting(false);
+        return;
+      }
+
+      const payload =
+        role === 'staff' && selectedCasino
+          ? {
+              name: trimmedName,
+              email: trimmedEmail,
+              password: trimmedPassword,
+              roleRequest: 'staff',
+              requestedCasinoId: selectedCasino,
+            }
+          : {
+              name: trimmedName,
+              email: trimmedEmail,
+              password: trimmedPassword,
+            };
+
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Registration failed');
-
-      // ✅ Save role and casinoId to AsyncStorage
-      await AsyncStorage.setItem('role', role);
-      if (role === 'staff' && selectedCasino) {
-        await AsyncStorage.setItem('casinoId', selectedCasino);
+      if (!response.ok) {
+        throw new Error(data?.error || 'Registration failed');
       }
 
-      setSuccess('Registration successful. You can now log in.');
-      setError('');
+      setSuccess(
+        role === 'staff'
+          ? 'Registered. Staff access is pending admin approval. You can log in as a regular user now.'
+          : (data?.message || 'Registration successful. You can now log in.')
+      );
+
+      // Clear form
+      setName('');
       setEmail('');
       setPassword('');
       setSelectedCasino(null);
-    } catch (err) {
-      setError(err.message);
-      setSuccess('');
+      setRole('user');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.heading}>Register</Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.select({ ios: 'padding', android: undefined })}
+    >
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <Text style={styles.heading}>Register</Text>
 
-      <TextInput
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        style={styles.input}
-        autoCapitalize="none"
-      />
-      <TextInput
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        style={styles.input}
-        secureTextEntry
-      />
+        <TextInput
+          placeholder="Full name"
+          value={name}
+          onChangeText={setName}
+          style={styles.input}
+          autoCapitalize="words"
+        />
 
-      <View style={styles.roleContainer}>
-        <TouchableOpacity onPress={() => setRole('user')}>
-          <Text style={[styles.role, role === 'user' && styles.selected]}>User</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setRole('staff')}>
-          <Text style={[styles.role, role === 'staff' && styles.selected]}>Staff</Text>
-        </TouchableOpacity>
-      </View>
+        <TextInput
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          style={styles.input}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
 
-      {role === 'staff' && (
+        <TextInput
+          placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
+          style={styles.input}
+          secureTextEntry
+        />
+
+        <View style={styles.roleContainer}>
+          <TouchableOpacity onPress={() => setRole('user')}>
+            <Text style={[styles.roleChip, role === 'user' && styles.selectedChip]}>User</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setRole('staff')}>
+            <Text style={[styles.roleChip, role === 'staff' && styles.selectedChip]}>Staff</Text>
+          </TouchableOpacity>
+        </View>
+
+       {role === 'staff' && (
+      <View style={styles.dropdownWrapper}>
         <DropDownPicker
           placeholder="Select your assigned casino"
           open={open}
@@ -117,72 +177,94 @@ export default function RegisterScreen() {
           value={selectedCasino}
           setValue={setSelectedCasino}
           items={casinos}
-          searchable={true}
-          containerStyle={{ marginBottom: 20, width: '100%' }}
+          setItems={setCasinos}
+          searchable
+          listMode="MODAL"           // ← prevents nested FlatList inside ScrollView
+          modalTitle="Select casino"
           zIndex={1000}
+          style={styles.dropdown}
+          dropDownContainerStyle={styles.dropdownContainer}
         />
-      )}
+      </View>
+    )}
 
-      <Button title="Register" onPress={handleRegister} />
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {success ? <Text style={styles.success}>{success}</Text> : null}
+        <Button title={submitting ? 'Registering...' : 'Register'} onPress={handleRegister} disabled={submitting} />
 
-      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.loginLink}>
-        <Text style={{ color: '#007bff' }}>Back to Login</Text>
-      </TouchableOpacity>
-    </View>
+        {!!error && <Text style={styles.error}>{error}</Text>}
+        {!!success && <Text style={styles.success}>{success}</Text>}
+
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.loginLink}>
+          <Text style={styles.loginLinkText}>Back to Login</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
-    justifyContent: 'center',
     padding: 20,
+    paddingTop: 40,
     backgroundColor: '#fff',
+    minHeight: '100%',
   },
   heading: {
     fontSize: 24,
-    marginBottom: 30,
+    marginBottom: 24,
     fontWeight: 'bold',
     textAlign: 'center',
   },
   input: {
     borderWidth: 1,
-    marginBottom: 15,
-    padding: 10,
-    borderRadius: 5,
+    borderColor: '#d9d9d9',
+    marginBottom: 14,
+    padding: 12,
+    borderRadius: 8,
   },
   roleContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    marginBottom: 15,
+    marginBottom: 16,
   },
-  role: {
-    padding: 10,
+  roleChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: '#007bff',
-    borderRadius: 5,
+    borderRadius: 20,
     color: '#007bff',
-    marginHorizontal: 5,
   },
-  selected: {
+  selectedChip: {
     backgroundColor: '#007bff',
     color: '#fff',
   },
+  dropdownWrapper: {
+    zIndex: 1000,
+    marginBottom: 16,
+  },
+  dropdown: {
+    borderColor: '#d9d9d9',
+  },
+  dropdownContainer: {
+    borderColor: '#d9d9d9',
+  },
   error: {
     color: 'red',
-    marginTop: 10,
+    marginTop: 12,
     textAlign: 'center',
   },
   success: {
     color: 'green',
-    marginTop: 10,
+    marginTop: 12,
     textAlign: 'center',
   },
   loginLink: {
     marginTop: 20,
     alignItems: 'center',
+  },
+  loginLinkText: {
+    color: '#007bff',
+    fontWeight: '600',
   },
 });

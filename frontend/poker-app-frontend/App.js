@@ -10,6 +10,8 @@ import HomeScreen from './screens/HomeScreen1';
 import CasinoDetailScreen from './screens/CasinoDetailScreen';
 import TournamentDetailScreen from './screens/TournamentDetailScreen';
 import AddTournamentScreen from './screens/AddTournamentScreen';
+import AdminStaffRequestsScreen from './screens/AdminStaffRequestsScreen';
+
 
 const Stack = createStackNavigator();
 
@@ -48,6 +50,12 @@ export default function App() {
           ) : (
             <>
               <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'Poker Tournament App' }} />
+              <Stack.Screen
+                name="AdminStaffRequests"
+                component={AdminStaffRequestsScreen}
+                options={{ title: 'Staff Requests' }}
+              />
+
               <Stack.Screen name="CasinoDetail" component={CasinoDetailScreen} options={{ title: 'Casino Details' }} />
               <Stack.Screen name="TournamentDetail" component={TournamentDetailScreen} options={{ title: 'Tournament Details' }} />
               <Stack.Screen name="AddTournament" component={AddTournamentScreen} options={{ title: 'Add Tournament' }} />

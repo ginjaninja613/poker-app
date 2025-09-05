@@ -1,10 +1,13 @@
+// frontend/screens/LoginScreen.js
 import React, { useState } from 'react';
 import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, Alert, Keyboard } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 import { login as apiLogin } from '../services/AuthService';
 import { useAuth } from '../App';
 
 export default function LoginScreen() {
+  const navigation = useNavigation();
   const auth = useAuth();
   const [email, setEmail] = useState('admin@test.com');
   const [password, setPassword] = useState('pass123');
@@ -33,9 +36,30 @@ export default function LoginScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Poker App</Text>
-      <TextInput style={styles.input} placeholder="Email" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-      <TextInput style={styles.input} placeholder="Password" secureTextEntry value={password} onChangeText={setPassword} />
-      {loading ? <ActivityIndicator size="large" /> : <Button title="Login" onPress={handleLogin} />}
+      <TextInput
+        style={styles.input}
+        placeholder="Email"
+        autoCapitalize="none"
+        keyboardType="email-address"
+        value={email}
+        onChangeText={setEmail}
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Password"
+        secureTextEntry
+        value={password}
+        onChangeText={setPassword}
+      />
+      {loading ? (
+        <ActivityIndicator size="large" />
+      ) : (
+        <>
+          <Button title="Login" onPress={handleLogin} />
+          <View style={{ height: 10 }} />
+          <Button title="Register" onPress={() => navigation.navigate('Register')} />
+        </>
+      )}
     </View>
   );
 }

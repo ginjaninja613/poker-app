@@ -1,3 +1,4 @@
+// frontend/screens/HomeScreen1.js
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
@@ -8,7 +9,6 @@ import {
   ActivityIndicator,
   Button,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -20,15 +20,65 @@ const API_BASE = 'http://192.168.0.178:5000';
 export default function HomeScreen({ navigation }) {
   const auth = useAuth();
 
-  const [casinos, setCasinos] = useState([]);          // always an array
+  const [casinos, setCasinos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  const safeSetCasinos = (data) => {
-    setCasinos(Array.isArray(data) ? data : []);
-  };
+  // role + pending requests
+  const [role, setRole] = useState(null);                // 'admin' | 'staff' | 'user' | null
+  const [pendingCount, setPendingCount] = useState(null); // number of pending staff requests (admins only)
 
+  const safeSetCasinos = (data) => setCasinos(Array.isArray(data) ? data : []);
+
+  // --- Pending staff requests count (for admins) ---
+  const fetchPendingCount = useCallback(async () => {
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        setRole(null);
+        setPendingCount(null);
+        return;
+      }
+      // who am I?
+      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const me = await meRes.json();
+      if (!meRes.ok) {
+        setRole(null);
+        setPendingCount(null);
+        return;
+      }
+      const r = (me.role || '').toLowerCase();
+      setRole(r);
+
+      const cids = Array.isArray(me.assignedCasinoIds) ? me.assignedCasinoIds : [];
+      if (r !== 'admin' || cids.length === 0) {
+        setPendingCount(null);
+        return;
+      }
+
+      let total = 0;
+      for (const cId of cids) {
+        try {
+          const res = await fetch(
+            `${API_BASE}/api/staff-requests?casinoId=${encodeURIComponent(cId)}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const data = await res.json();
+          if (res.ok && Array.isArray(data.requests)) {
+            total += data.requests.length;
+          }
+        } catch {}
+      }
+      setPendingCount(total);
+    } catch {
+      setPendingCount(null);
+    }
+  }, []);
+
+  // --- Casinos loading ---
   const fetchAllCasinos = async () => {
     const res = await fetch(`${API_BASE}/api/casinos`);
     const text = await res.text();
@@ -43,11 +93,11 @@ export default function HomeScreen({ navigation }) {
 
   const loadCasinos = useCallback(async () => {
     setError(null);
+    setLoading(true);
     try {
-      // Ask for permission
+      // Ask for location permission (fallback to all casinos)
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        // No location? Just fetch all casinos
         await fetchAllCasinos();
         return;
       }
@@ -61,7 +111,6 @@ export default function HomeScreen({ navigation }) {
       );
       const text = await res.text();
       if (!res.ok) {
-        // fallback to all casinos if nearby fails (e.g., no geo index yet)
         await fetchAllCasinos();
         return;
       }
@@ -70,12 +119,10 @@ export default function HomeScreen({ navigation }) {
         const data = text ? JSON.parse(text) : [];
         safeSetCasinos(data);
       } catch {
-        // fallback on bad JSON
         await fetchAllCasinos();
       }
     } catch (err) {
       setError(err?.message || 'Failed to load casinos');
-      // final safety: try all casinos once
       try { await fetchAllCasinos(); } catch {}
     } finally {
       setLoading(false);
@@ -83,23 +130,30 @@ export default function HomeScreen({ navigation }) {
     }
   }, []);
 
+  // initial load + refresh on focus
   useEffect(() => {
     loadCasinos();
-  }, [loadCasinos]);
+    fetchPendingCount();
+    const unsub = navigation.addListener('focus', () => {
+      loadCasinos();
+      fetchPendingCount();
+    });
+    return unsub;
+  }, [navigation, loadCasinos, fetchPendingCount]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadCasinos();
+    await Promise.all([loadCasinos(), fetchPendingCount()]);
   };
 
   const handleLogout = async () => {
     try {
-      await logout();                          // clears token + role
-      await AsyncStorage.removeItem('casinoId'); // clear any stored casino
+      await logout();
+      await AsyncStorage.removeItem('casinoId');
     } catch (e) {
       console.warn('Logout error:', e);
     } finally {
-      auth.signOut(); // flip to Login stack immediately
+      auth.signOut();
     }
   };
 
@@ -120,72 +174,65 @@ export default function HomeScreen({ navigation }) {
     </TouchableOpacity>
   );
 
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" />
-        <Text>Loading nearby casinos...</Text>
+  const TopBar = () => (
+    <View style={styles.topBar}>
+      <View style={styles.topBarLeft}>
         <Button title="Logout" onPress={handleLogout} />
       </View>
-    );
-  }
-
-  if (error) {
-    // Non-blocking: still render list (might be from fallback)
-    console.warn('Home error:', error);
-  }
+      <View style={styles.topBarRight}>
+        <Button
+          title={`Staff Requests${typeof pendingCount === 'number' ? ` (${pendingCount})` : ''}`}
+          onPress={() => navigation.navigate('AdminStaffRequests')}
+        />
+      </View>
+    </View>
+  );
 
   const dataSafe = Array.isArray(casinos) ? casinos : [];
 
   return (
-    <View style={styles.container}>
-      <Button title="Logout" onPress={handleLogout} />
-      <FlatList
-        data={dataSafe}
-        keyExtractor={(item, index) => item?._id ?? String(index)}
-        renderItem={renderItem}
-        ListEmptyComponent={<Text style={styles.empty}>No casinos found.</Text>}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        contentContainerStyle={dataSafe.length === 0 && { flex: 1, justifyContent: 'center' }}
-      />
+    <View style={styles.root}>
+      <TopBar />
+      {loading ? (
+        <View style={[styles.container, styles.center]}>
+          <ActivityIndicator size="large" />
+          <Text>Loading nearby casinos...</Text>
+          {error ? <Text style={{ color: 'red', marginTop: 6 }}>{String(error)}</Text> : null}
+        </View>
+      ) : (
+        <View style={styles.container}>
+          <FlatList
+            data={dataSafe}
+            keyExtractor={(item, index) => item?._id ?? String(index)}
+            renderItem={renderItem}
+            ListEmptyComponent={<Text style={styles.empty}>No casinos found.</Text>}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={dataSafe.length === 0 && { flex: 1, justifyContent: 'center' }}
+          />
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: '#fff',
-    flex: 1,
-  },
-  card: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#ccc',
-  },
-  name: {
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  address: {
-    fontSize: 14,
-    color: '#666',
-  },
-  distance: {
-    fontSize: 13,
-    color: '#007aff',
-    marginTop: 4,
-  },
-  empty: {
-    textAlign: 'center',
-    color: 'gray',
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
+  root: { flex: 1, backgroundColor: '#fff' },
+  topBar: {
+    paddingTop: 10,
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 8,
+    backgroundColor: '#fff',
   },
+  topBarLeft: { flexShrink: 0 },
+  topBarRight: { flexShrink: 0 },
+  container: { padding: 16, backgroundColor: '#fff', flex: 1 },
+  card: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#ccc' },
+  name: { fontWeight: 'bold', fontSize: 16 },
+  address: { fontSize: 14, color: '#666' },
+  distance: { fontSize: 13, color: '#007aff', marginTop: 4 },
+  empty: { textAlign: 'center', color: 'gray' },
+  center: { justifyContent: 'center', alignItems: 'center', gap: 8 },
 });

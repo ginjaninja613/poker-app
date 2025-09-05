@@ -1,3 +1,4 @@
+// frontend/screens/TournamentDetailScreen.js
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, Button, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,16 +14,44 @@ export default function TournamentDetailScreen({ route, navigation }) {
   const structure = Array.isArray(tournament?.structure) ? tournament.structure : [];
   const days = Array.isArray(tournament?.days) ? tournament.days : [];
 
+  // Determine edit permissions:
+  // - Admin: always true
+  // - Staff: only if assigned to this casino
   useEffect(() => {
     (async () => {
-      const role = await AsyncStorage.getItem('role');
-      setCanEdit(role === 'staff' || role === 'admin');
+      // quick fallback from cached role
+      const cachedRole = await AsyncStorage.getItem('role');
+      if (cachedRole === 'admin' || cachedRole === 'staff') setCanEdit(true);
+
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (!token) return;
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const me = await res.json();
+        if (!res.ok) return;
+
+        const assigned = Array.isArray(me.assignedCasinoIds)
+          ? me.assignedCasinoIds.map(String)
+          : [];
+        const hasAccess =
+          me.role === 'admin' ||
+          (me.role === 'staff' && assigned.includes(String(casinoId)));
+        setCanEdit(hasAccess);
+      } catch {
+        // ignore; UI still works read-only
+      }
     })();
-  }, []);
+  }, [casinoId]);
 
   const parseJson = async (res) => {
     const t = await res.text();
-    try { return t ? JSON.parse(t) : {}; } catch { throw new Error('Invalid JSON'); }
+    try {
+      return t ? JSON.parse(t) : {};
+    } catch {
+      throw new Error('Invalid JSON');
+    }
   };
 
   useFocusEffect(
@@ -50,13 +79,17 @@ export default function TournamentDetailScreen({ route, navigation }) {
         onPress: async () => {
           try {
             const token = await AsyncStorage.getItem('token');
-            const res = await fetch(`${API_BASE}/api/casinos/${casinoId}/tournaments/${tournament._id}`, {
-              method: 'DELETE',
-              headers: { Authorization: `Bearer ${token}` },
-            });
+            const res = await fetch(
+              `${API_BASE}/api/casinos/${casinoId}/tournaments/${tournament._id}`,
+              {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+              }
+            );
             const data = await parseJson(res);
             if (!res.ok) throw new Error(data?.error || 'Delete failed');
-            Alert.alert('Success', 'Tournament deleted'); navigation.goBack();
+            Alert.alert('Success', 'Tournament deleted');
+            navigation.goBack();
           } catch (err) {
             Alert.alert('Error', err.message);
           }
@@ -120,7 +153,8 @@ export default function TournamentDetailScreen({ route, navigation }) {
       )}
       <Text style={styles.item}>🃏 Game: {tournament?.gameType || 'No Limit Hold’em'}</Text>
       <Text style={styles.item}>
-        🕒 Start: {tournament?.dateTimeUTC ? new Date(tournament.dateTimeUTC).toLocaleString() : '—'}
+        🕒 Start:{' '}
+        {tournament?.dateTimeUTC ? new Date(tournament.dateTimeUTC).toLocaleString() : '—'}
       </Text>
 
       {!!tournament?.bounty && tournament.bounty > 0 && (
@@ -129,7 +163,8 @@ export default function TournamentDetailScreen({ route, navigation }) {
 
       {tournament?.reEntry && (
         <Text style={styles.item}>
-          🔁 Re-Entry: {tournament?.reEntryUnlimited ? 'Unlimited' : `Max ${tournament?.reEntryCount ?? 0}`}
+          🔁 Re-Entry:{' '}
+          {tournament?.reEntryUnlimited ? 'Unlimited' : `Max ${tournament?.reEntryCount ?? 0}`}
         </Text>
       )}
 
@@ -151,18 +186,26 @@ export default function TournamentDetailScreen({ route, navigation }) {
                 <Text style={styles.item}>
                   {d.label || `Day ${i + 1}`} — {new Date(d.startTimeUTC).toLocaleString()}
                 </Text>
-                {Array.isArray(d.structure) && d.structure.length > 0 && renderStructureTable(d.structure)}
+                {Array.isArray(d.structure) &&
+                  d.structure.length > 0 &&
+                  renderStructureTable(d.structure)}
               </View>
             ))}
         </View>
       )}
 
-      {(!days.length || !days.some((d) => Array.isArray(d.structure) && d.structure.length > 0)) &&
+      {(!days.length ||
+        !days.some((d) => Array.isArray(d.structure) && d.structure.length > 0)) &&
         renderStructureTable(structure)}
 
       {canEdit && (
         <View style={styles.buttonRow}>
-          <Button title="✏️ Edit" onPress={() => navigation.navigate('EditTournament', { tournamentId: tournament._id, casinoId })} />
+          <Button
+            title="✏️ Edit"
+            onPress={() =>
+              navigation.navigate('EditTournament', { tournamentId: tournament._id, casinoId })
+            }
+          />
           <View style={{ width: 10 }} />
           <Button title="🗑️ Delete" color="#c00" onPress={handleDelete} />
         </View>
@@ -178,7 +221,13 @@ const styles = StyleSheet.create({
   item: { fontSize: 14, marginVertical: 2 },
   sectionHeader: { fontSize: 16, fontWeight: 'bold', marginTop: 10, marginBottom: 4 },
   structureBox: { marginTop: 10 },
-  tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#ccc', marginBottom: 4, paddingBottom: 4 },
+  tableHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderColor: '#ccc',
+    marginBottom: 4,
+    paddingBottom: 4,
+  },
   tableRow: { flexDirection: 'row', paddingVertical: 6 },
   tableCell: { flex: 1, fontSize: 13, textAlign: 'center' },
   headerCell: { fontWeight: 'bold' },
