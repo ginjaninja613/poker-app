@@ -1,26 +1,62 @@
 const express = require('express');
-const router = express.Router();
 const Casino = require('../models/Casino');
+const auth = require('../middleware/auth');
+const requireStaff = require('../middleware/requireStaff');
+const router = express.Router();
+const Tournament = require('../models/Tournament');
 
-// GET all casinos
-router.get('/', async (req, res) => {
+
+// List casinos (public)
+router.get('/', async (_req, res) => {
+  const casinos = await Casino.find().lean();
+  res.json(casinos);
+});
+
+// Create casino (staff/admin only)
+router.post('/', auth, requireStaff, async (req, res) => {
   try {
-    const casinos = await Casino.find();
-    res.json(casinos);
+    const { name, city, country, location } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const casino = await Casino.create({ name, city, country, location });
+    res.status(201).json(casino);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch casinos' });
+    res.status(500).json({ error: 'Failed to create casino' });
   }
 });
 
-// GET nearby casinos by lat/lng
+// Update casino (staff/admin only, and must be in assignedCasinoIds unless admin)
+router.put('/:id', auth, requireStaff, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (req.user.role !== 'admin' && !req.user.assignedCasinoIds.includes(id)) {
+      return res.status(403).json({ error: 'Not assigned to this casino' });
+    }
+    const updated = await Casino.findByIdAndUpdate(id, req.body, { new: true });
+    if (!updated) return res.status(404).json({ error: 'Casino not found' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update casino' });
+  }
+});
+
+// Delete casino (admin only)
+router.delete('/:id', auth, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  const deleted = await Casino.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: 'Casino not found' });
+  res.json({ ok: true });
+});
+
+// Nearby casinos: GET /api/casinos/nearby?lat=...&lng=...
 router.get('/nearby', async (req, res) => {
   const { lat, lng } = req.query;
-
+  // If lat/lng missing, just return all casinos
   if (!lat || !lng) {
-    return res.status(400).json({ error: 'Latitude and longitude required' });
+    const all = await Casino.find().lean();
+    return res.json(all);
   }
-
   try {
+    // Works if "location" is a GeoJSON Point with 2dsphere index
     const casinos = await Casino.aggregate([
       {
         $geoNear: {
@@ -32,40 +68,89 @@ router.get('/nearby', async (req, res) => {
     ]);
     res.json(casinos);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to find nearby casinos' });
+    // Fallback if geo index/coords are missing: return all
+    const all = await Casino.find().lean();
+    res.json(all);
   }
 });
-// GET a specific casino by ID
+
+// Casino detail: GET /api/casinos/:id
 router.get('/:id', async (req, res) => {
+  const item = await Casino.findById(req.params.id).lean();
+  if (!item) return res.status(404).json({ error: 'Casino not found' });
+  res.json(item);
+});
+
+// Helper for staff permission
+function ensureAssignedOrAdmin(req, casinoId) {
+  if (!req.user) return false;
+  if (req.user.role === 'admin') return true;
+  return req.user.assignedCasinoIds?.includes(String(casinoId));
+}
+
+// List tournaments for a casino: GET /api/casinos/:id/tournaments
+router.get('/:id/tournaments', async (req, res) => {
+  const items = await Tournament.find({ casinoId: req.params.id }).sort({ dateTimeUTC: 1 }).lean();
+  res.json(items);
+});
+
+// Create tournament for a casino: POST /api/casinos/:id/tournaments
+router.post('/:id/tournaments', auth, requireStaff, async (req, res) => {
   try {
-    const casino = await Casino.findById(req.params.id);
-    res.json(casino);
+    const casinoId = req.params.id;
+    if (!ensureAssignedOrAdmin(req, casinoId)) {
+      return res.status(403).json({ error: 'Not assigned to this casino' });
+    }
+    const casino = await Casino.findById(casinoId).lean();
+    if (!casino) return res.status(400).json({ error: 'Casino does not exist' });
+
+    const data = { ...req.body, casinoId };
+    const created = await Tournament.create(data);
+    res.status(201).json(created);
   } catch (err) {
-    res.status(404).json({ error: 'Casino not found' });
+    res.status(500).json({ error: 'Failed to create tournament' });
   }
 });
 
-// POST: Add tournament to a casino
-router.post('/:id/tournaments', async (req, res) => {
+// Update tournament: PUT /api/casinos/:casinoId/tournaments/:tournamentId
+router.put('/:casinoId/tournaments/:tournamentId', auth, requireStaff, async (req, res) => {
   try {
-    const { id } = req.params;
-    const newTournament = req.body;
-    console.log('📦 Received new tournament:', newTournament);
-
-    const casino = await Casino.findById(id);
-    if (!casino) {
-      return res.status(404).json({ error: 'Casino not found' });
+    const { casinoId, tournamentId } = req.params;
+    const existing = await Tournament.findById(tournamentId);
+    if (!existing) return res.status(404).json({ error: 'Tournament not found' });
+    if (String(existing.casinoId) !== String(casinoId)) {
+      return res.status(400).json({ error: 'Tournament does not belong to this casino' });
+    }
+    if (!ensureAssignedOrAdmin(req, casinoId)) {
+      return res.status(403).json({ error: 'Not assigned to this casino' });
     }
 
-    casino.tournaments.push(newTournament);
-    await casino.save();
-
-    res.status(201).json({ message: 'Tournament added successfully' });
+    Object.assign(existing, req.body);
+    const saved = await existing.save();
+    res.json(saved);
   } catch (err) {
-    console.error('Error adding tournament:', err.message);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Failed to update tournament' });
   }
 });
 
-module.exports = router;
+// Delete tournament: DELETE /api/casinos/:casinoId/tournaments/:tournamentId
+router.delete('/:casinoId/tournaments/:tournamentId', auth, requireStaff, async (req, res) => {
+  try {
+    const { casinoId, tournamentId } = req.params;
+    const existing = await Tournament.findById(tournamentId);
+    if (!existing) return res.status(404).json({ error: 'Tournament not found' });
+    if (String(existing.casinoId) !== String(casinoId)) {
+      return res.status(400).json({ error: 'Tournament does not belong to this casino' });
+    }
+    if (!ensureAssignedOrAdmin(req, casinoId)) {
+      return res.status(403).json({ error: 'Not assigned to this casino' });
+    }
+    await existing.deleteOne();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete tournament' });
+  }
+});
 
+
+module.exports = router;
