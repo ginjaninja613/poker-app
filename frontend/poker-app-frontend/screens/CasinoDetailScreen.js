@@ -1,5 +1,5 @@
 // frontend/screens/CasinoDetailScreen.js
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,25 +14,42 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE = 'http://192.168.0.178:5000';
 
+// Helper to safely extract an ID from various shapes
+function getId(objOrId) {
+  if (!objOrId) return '';
+  if (typeof objOrId === 'string') return objOrId;
+  return String(objOrId._id || objOrId.id || objOrId.casinoId || '');
+}
+
 export default function CasinoDetailScreen({ route, navigation }) {
-  const { casino } = route.params;
-  const [data, setData] = useState(casino);
+  // Support either a full casino object or just { casinoId, casinoName }
+  const { casino: casinoParam, casinoId: casinoIdParam, casinoName: casinoNameParam } = route.params || {};
+
+  // Stable casino id (does NOT change when we call setData)
+  const idToUse = useMemo(
+    () => getId(casinoParam) || getId(casinoIdParam),
+    [casinoParam, casinoIdParam]
+  );
+
+  const [data, setData] = useState(casinoParam || null); // prefer the object if provided
   const [tournaments, setTournaments] = useState([]); // separate state (not on casino)
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState(null);
   const [assignedIds, setAssignedIds] = useState([]); // strings from /me
 
   const fetchCasino = async (id) => {
+    if (!id) return casinoParam || null;
     const res = await fetch(`${API_BASE}/api/casinos/${id}`);
     const text = await res.text();
     try {
-      return text ? JSON.parse(text) : casino;
+      return text ? JSON.parse(text) : (casinoParam || null);
     } catch {
-      return casino;
+      return casinoParam || null;
     }
   };
 
   const fetchTournaments = async (id) => {
+    if (!id) return [];
     const res = await fetch(`${API_BASE}/api/casinos/${id}/tournaments`);
     const text = await res.text();
     try {
@@ -65,15 +82,23 @@ export default function CasinoDetailScreen({ route, navigation }) {
     }
   };
 
+  // IMPORTANT: do NOT depend on `data` here; that caused the refresh loop.
   const load = useCallback(async () => {
     setLoading(true);
     try {
       await fetchMe();
 
-      const updated = await fetchCasino(casino._id);
-      setData(updated || casino);
+      if (!idToUse) {
+        // No ID at all — still show whatever we have from params
+        setData(casinoParam || null);
+        setTournaments([]);
+        return;
+      }
 
-      const list = await fetchTournaments(casino._id);
+      const updated = await fetchCasino(idToUse);
+      setData(updated || casinoParam || null);
+
+      const list = await fetchTournaments(idToUse);
       setTournaments(list);
     } catch (err) {
       console.warn('CasinoDetail load error:', err?.message);
@@ -81,11 +106,11 @@ export default function CasinoDetailScreen({ route, navigation }) {
     } finally {
       setLoading(false);
     }
-  }, [casino]);
+  }, [idToUse, casinoParam]);
 
   useEffect(() => {
-    load();
-    const unsubscribe = navigation.addListener('focus', load);
+    load(); // initial load
+    const unsubscribe = navigation.addListener('focus', load); // reload when screen regains focus
     return unsubscribe;
   }, [navigation, load]);
 
@@ -95,8 +120,8 @@ export default function CasinoDetailScreen({ route, navigation }) {
       onPress={() =>
         navigation.navigate('TournamentDetail', {
           tournament: JSON.parse(JSON.stringify(item)),
-          casinoName: data?.name || '',
-          casinoId: data?._id,
+          casinoName: (data?.name || casinoNameParam || ''),
+          casinoId: idToUse,
         })
       }
     >
@@ -120,10 +145,10 @@ export default function CasinoDetailScreen({ route, navigation }) {
     );
   }
 
-  const casinoIdStr = String((data && data._id) || (casino && casino._id) || '');
+  const casinoIdStr = idToUse;
   const canAdd =
     userRole === 'admin' ||
-    (userRole === 'staff' && assignedIds.includes(casinoIdStr));
+    (userRole === 'staff' && assignedIds.includes(String(casinoIdStr)));
 
   const dataSafe = data || {};
   const listSafe = Array.isArray(tournaments) ? tournaments : [];
@@ -131,15 +156,17 @@ export default function CasinoDetailScreen({ route, navigation }) {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.headerBox}>
-        <Text style={styles.header}>{dataSafe.name || 'Casino'}</Text>
-        <Text style={styles.address}>{dataSafe.address || ''}</Text>
+        <Text style={styles.header}>{dataSafe.name || casinoNameParam || 'Casino'}</Text>
+        <Text style={styles.address}>
+          {typeof dataSafe.address === 'string' ? dataSafe.address : ''}
+        </Text>
       </View>
 
       {canAdd && (
         <View style={styles.buttonWrapper}>
           <Button
             title="➕ Add Tournament"
-            onPress={() => navigation.navigate('AddTournament', { casinoId: dataSafe._id })}
+            onPress={() => navigation.navigate('AddTournament', { casinoId: casinoIdStr })}
             color="#2196F3"
           />
         </View>

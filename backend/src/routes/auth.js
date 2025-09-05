@@ -107,9 +107,24 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Profile (verify token)
+// Profile (verify token) — now returns name & email too
 router.get('/me', auth, async (req, res) => {
-  res.json({ id: req.user.id, role: req.user.role, assignedCasinoIds: req.user.assignedCasinoIds });
+  try {
+    // Always read fresh data (role/assignments can change after admin approval)
+    const user = await User.findById(req.user.id).select('_id name email role assignedCasinoIds').lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    res.json({
+      id: String(user._id),
+      name: user.name || '',
+      email: user.email || '',
+      role: user.role || 'user',
+      assignedCasinoIds: Array.isArray(user.assignedCasinoIds) ? user.assignedCasinoIds : [],
+    });
+  } catch (err) {
+    console.error('GET /me error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
 module.exports = router;

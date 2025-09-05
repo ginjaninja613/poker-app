@@ -4,7 +4,7 @@ import { View, Text, TextInput, Button, StyleSheet, ActivityIndicator, Alert, Ke
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import { login as apiLogin } from '../services/AuthService';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext'; // ⬅️ changed from '../App' to break require cycle
 
 export default function LoginScreen() {
   const navigation = useNavigation();

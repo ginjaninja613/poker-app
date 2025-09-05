@@ -1,5 +1,5 @@
 // frontend/screens/HomeScreen1.js
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,232 +7,256 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Button,
   RefreshControl,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { logout } from '../services/AuthService';
-import { useAuth } from '../App';
 
-const API_BASE = 'http://192.168.0.178:5000';
+const API_BASE = 'http://192.168.0.178:5000'; // update if your backend IP changes
+
+// Haversine distance in kilometers
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 6371; // km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// Try to extract casino coordinates from various shapes
+function getCasinoCoords(item) {
+  // GeoJSON style: { type: 'Point', coordinates: [lng, lat] }
+  if (item?.location && typeof item.location === 'object') {
+    const coords = item.location.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      const [lng, lat] = coords;
+      if (typeof lat === 'number' && typeof lng === 'number') return { lat, lng };
+    }
+    // Sometimes nested fields like { lat, lng } or { latitude, longitude }
+    if (typeof item.location.lat === 'number' && typeof item.location.lng === 'number') {
+      return { lat: item.location.lat, lng: item.location.lng };
+    }
+    if (typeof item.location.latitude === 'number' && typeof item.location.longitude === 'number') {
+      return { lat: item.location.latitude, lng: item.location.longitude };
+    }
+  }
+  // Flat fields
+  if (typeof item?.lat === 'number' && typeof item?.lng === 'number') {
+    return { lat: item.lat, lng: item.lng };
+  }
+  if (typeof item?.latitude === 'number' && typeof item?.longitude === 'number') {
+    return { lat: item.latitude, lng: item.longitude };
+  }
+  return null;
+}
+
+// Fallback text if we don't have distance
+function formatLocationString(item) {
+  const city = item?.city;
+  const loc = item?.location;
+
+  if (typeof city === 'string' && city.trim()) return city.trim();
+  if (typeof loc === 'string' && loc.trim()) return loc.trim();
+
+  if (loc && typeof loc === 'object') {
+    if (typeof loc.city === 'string' && loc.city.trim()) return loc.city.trim();
+    if (typeof loc.name === 'string' && loc.name.trim()) return loc.name.trim();
+    if (typeof loc.town === 'string' && loc.town.trim()) return loc.town.trim();
+  }
+  return null;
+}
+
+function kmToDisplay(km, unit) {
+  if (typeof km !== 'number') return null;
+  if (unit === 'mi') return km * 0.621371;
+  return km; // km
+}
 
 export default function HomeScreen({ navigation }) {
-  const auth = useAuth();
-
-  const [casinos, setCasinos] = useState([]);
+  const [casinos, setCasinos] = useState([]); // raw array
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [userCoords, setUserCoords] = useState(null); // { lat, lng }
+  const [distanceUnit, setDistanceUnit] = useState('km'); // 'km' | 'mi'
 
-  // role + pending requests
-  const [role, setRole] = useState(null);                // 'admin' | 'staff' | 'user' | null
-  const [pendingCount, setPendingCount] = useState(null); // number of pending staff requests (admins only)
+  const safeSetCasinos = (data) => {
+    setCasinos(Array.isArray(data) ? data : []);
+  };
 
-  const safeSetCasinos = (data) => setCasinos(Array.isArray(data) ? data : []);
-
-  // --- Pending staff requests count (for admins) ---
-  const fetchPendingCount = useCallback(async () => {
+  // Get user's current position once (don’t block loading casinos)
+  const getUserLocation = useCallback(async () => {
     try {
-      const token = await AsyncStorage.getItem('token');
-      if (!token) {
-        setRole(null);
-        setPendingCount(null);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setUserCoords(null); // permission denied; we’ll show city text instead
         return;
       }
-      // who am I?
-      const meRes = await fetch(`${API_BASE}/api/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const me = await meRes.json();
-      if (!meRes.ok) {
-        setRole(null);
-        setPendingCount(null);
-        return;
-      }
-      const r = (me.role || '').toLowerCase();
-      setRole(r);
-
-      const cids = Array.isArray(me.assignedCasinoIds) ? me.assignedCasinoIds : [];
-      if (r !== 'admin' || cids.length === 0) {
-        setPendingCount(null);
-        return;
-      }
-
-      let total = 0;
-      for (const cId of cids) {
-        try {
-          const res = await fetch(
-            `${API_BASE}/api/staff-requests?casinoId=${encodeURIComponent(cId)}`,
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          const data = await res.json();
-          if (res.ok && Array.isArray(data.requests)) {
-            total += data.requests.length;
-          }
-        } catch {}
-      }
-      setPendingCount(total);
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setUserCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
     } catch {
-      setPendingCount(null);
+      setUserCoords(null);
     }
   }, []);
 
-  // --- Casinos loading ---
-  const fetchAllCasinos = async () => {
-    const res = await fetch(`${API_BASE}/api/casinos`);
-    const text = await res.text();
+  const fetchAllCasinos = useCallback(async () => {
     try {
-      const json = text ? JSON.parse(text) : [];
-      safeSetCasinos(json);
-    } catch {
+      setError(null);
+      if (!refreshing) setLoading(true);
+
+      const res = await fetch(`${API_BASE}/api/casinos`);
+      const data = await res.json();
+      safeSetCasinos(data);
+    } catch (e) {
+      setError('Failed to load casinos. Pull to refresh to try again.');
       safeSetCasinos([]);
-      throw new Error('Failed to parse casinos list');
-    }
-  };
-
-  const loadCasinos = useCallback(async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      // Ask for location permission (fallback to all casinos)
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        await fetchAllCasinos();
-        return;
-      }
-
-      const location = await Location.getCurrentPositionAsync({});
-      const latitude = location.coords.latitude;
-      const longitude = location.coords.longitude;
-
-      const res = await fetch(
-        `${API_BASE}/api/casinos/nearby?lat=${latitude}&lng=${longitude}`
-      );
-      const text = await res.text();
-      if (!res.ok) {
-        await fetchAllCasinos();
-        return;
-      }
-
-      try {
-        const data = text ? JSON.parse(text) : [];
-        safeSetCasinos(data);
-      } catch {
-        await fetchAllCasinos();
-      }
-    } catch (err) {
-      setError(err?.message || 'Failed to load casinos');
-      try { await fetchAllCasinos(); } catch {}
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
+  }, [refreshing]);
+
+  const loadUnitPref = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem('distanceUnit');
+      if (stored === 'mi' || stored === 'km') setDistanceUnit(stored);
+      else setDistanceUnit('km');
+    } catch {
+      setDistanceUnit('km');
+    }
   }, []);
 
-  // initial load + refresh on focus
   useEffect(() => {
-    loadCasinos();
-    fetchPendingCount();
-    const unsub = navigation.addListener('focus', () => {
-      loadCasinos();
-      fetchPendingCount();
-    });
-    return unsub;
-  }, [navigation, loadCasinos, fetchPendingCount]);
+    fetchAllCasinos();
+    getUserLocation();
+    loadUnitPref();
+  }, [fetchAllCasinos, getUserLocation, loadUnitPref]);
+
+  useFocusEffect(
+    useCallback(() => {
+      // refresh list and unit whenever returning to Home
+      loadUnitPref();
+      fetchAllCasinos();
+    }, [loadUnitPref, fetchAllCasinos])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadCasinos(), fetchPendingCount()]);
+    await Promise.all([fetchAllCasinos(), getUserLocation(), loadUnitPref()]);
   };
 
-  const handleLogout = async () => {
-    try {
-      await logout();
-      await AsyncStorage.removeItem('casinoId');
-    } catch (e) {
-      console.warn('Logout error:', e);
-    } finally {
-      auth.signOut();
+  // Build a derived, sorted list WITH distance (if possible)
+  const dataSorted = useMemo(() => {
+    const list = (casinos || []).map((c) => {
+      let dKm = null;
+      const cc = getCasinoCoords(c);
+      if (userCoords && cc) {
+        dKm = distanceKm(userCoords.lat, userCoords.lng, cc.lat, cc.lng);
+      }
+      return { ...c, __distanceKm: dKm };
+    });
+
+    // Sort: items with distance first, by ascending distance; items without distance at the end
+    list.sort((a, b) => {
+      const da = a.__distanceKm;
+      const db = b.__distanceKm;
+      if (da == null && db == null) return 0;
+      if (da == null) return 1;
+      if (db == null) return -1;
+      return da - db;
+    });
+
+    return list;
+  }, [casinos, userCoords]);
+
+  const renderItem = ({ item }) => {
+    const id = item?._id || item?.id || item?.casinoId;
+
+    const rawName = item?.name || item?.title || item?.casinoName;
+    const name =
+      typeof rawName === 'string' && rawName.trim()
+        ? rawName
+        : 'Unknown Casino';
+
+    // Prefer distance if we have it; else fallback to a place string
+    let subtitle = null;
+    if (typeof item.__distanceKm === 'number') {
+      const val = kmToDisplay(item.__distanceKm, distanceUnit);
+      const unitLabel = distanceUnit === 'mi' ? 'mi' : 'km';
+      subtitle = `${val.toFixed(1)} ${unitLabel} away`;
+    } else {
+      subtitle = formatLocationString(item);
     }
+
+    return (
+      <TouchableOpacity
+        style={styles.row}
+        onPress={() =>
+          navigation.navigate('CasinoDetail', {
+            casinoId: id,
+            casinoName: name,
+            casino: item, // ⬅️ pass the full casino object for screens that expect route.params.casino._id
+          })
+        }
+      >
+        <Text style={styles.rowTitle}>{name}</Text>
+        {subtitle ? <Text style={styles.rowSub}>{subtitle}</Text> : null}
+      </TouchableOpacity>
+    );
   };
 
-  const renderItem = ({ item }) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => navigation.navigate('CasinoDetail', { casino: item })}
-    >
-      <View>
-        <Text style={styles.name}>{item?.name || 'Unnamed Casino'}</Text>
-        <Text style={styles.address}>{item?.address || 'No address provided'}</Text>
-        {typeof item?.distance === 'number' && (
-          <Text style={styles.distance}>
-            {(item.distance / 1000).toFixed(1)} km away
-          </Text>
-        )}
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+        <Text style={styles.muted}>Loading casinos…</Text>
       </View>
-    </TouchableOpacity>
-  );
-
-  const TopBar = () => (
-    <View style={styles.topBar}>
-      <View style={styles.topBarLeft}>
-        <Button title="Logout" onPress={handleLogout} />
-      </View>
-      <View style={styles.topBarRight}>
-        <Button
-          title={`Staff Requests${typeof pendingCount === 'number' ? ` (${pendingCount})` : ''}`}
-          onPress={() => navigation.navigate('AdminStaffRequests')}
-        />
-      </View>
-    </View>
-  );
-
-  const dataSafe = Array.isArray(casinos) ? casinos : [];
+    );
+  }
 
   return (
-    <View style={styles.root}>
-      <TopBar />
-      {loading ? (
-        <View style={[styles.container, styles.center]}>
-          <ActivityIndicator size="large" />
-          <Text>Loading nearby casinos...</Text>
-          {error ? <Text style={{ color: 'red', marginTop: 6 }}>{String(error)}</Text> : null}
-        </View>
-      ) : (
-        <View style={styles.container}>
-          <FlatList
-            data={dataSafe}
-            keyExtractor={(item, index) => item?._id ?? String(index)}
-            renderItem={renderItem}
-            ListEmptyComponent={<Text style={styles.empty}>No casinos found.</Text>}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            contentContainerStyle={dataSafe.length === 0 && { flex: 1, justifyContent: 'center' }}
-          />
-        </View>
-      )}
+    <View style={styles.container}>
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <FlatList
+        data={dataSorted}
+        keyExtractor={(item, idx) => String(item?._id || item?.id || item?.casinoId || idx)}
+        renderItem={renderItem}
+        contentContainerStyle={dataSorted.length === 0 && { flex: 1, justifyContent: 'center' }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        ListEmptyComponent={
+          <View style={styles.center}>
+            <Text style={styles.muted}>No casinos found.</Text>
+          </View>
+        }
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#fff' },
-  topBar: {
-    paddingTop: 10,
-    paddingHorizontal: 12,
-    paddingBottom: 6,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  container: { flex: 1, backgroundColor: '#f8fafc' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  muted: { marginTop: 8, color: '#6b7280' },
+  error: { padding: 12, color: '#b91c1c', textAlign: 'center' },
+  row: {
     backgroundColor: '#fff',
+    marginHorizontal: 12,
+    marginVertical: 8,
+    padding: 16,
+    borderRadius: 14,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
-  topBarLeft: { flexShrink: 0 },
-  topBarRight: { flexShrink: 0 },
-  container: { padding: 16, backgroundColor: '#fff', flex: 1 },
-  card: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#ccc' },
-  name: { fontWeight: 'bold', fontSize: 16 },
-  address: { fontSize: 14, color: '#666' },
-  distance: { fontSize: 13, color: '#007aff', marginTop: 4 },
-  empty: { textAlign: 'center', color: 'gray' },
-  center: { justifyContent: 'center', alignItems: 'center', gap: 8 },
+  rowTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
+  rowSub: { marginTop: 4, color: '#6b7280' },
 });

@@ -198,6 +198,22 @@ export default function TournamentDetailScreen({ route, navigation }) {
         !days.some((d) => Array.isArray(d.structure) && d.structure.length > 0)) &&
         renderStructureTable(structure)}
 
+      {/* NEW: Start Tournament button (admin or assigned staff) */}
+      {canEdit && (
+        <View style={[styles.buttonRow, { marginTop: 16 }]}>
+          <Button
+            title="▶️ Start Tournament"
+            onPress={() =>
+              navigation.navigate('StartTournament', {
+                tournament: tournament,
+                casinoName,
+              })
+            }
+            color="#2563eb"
+          />
+        </View>
+      )}
+
       {canEdit && (
         <View style={styles.buttonRow}>
           <Button
