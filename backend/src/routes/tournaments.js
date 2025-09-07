@@ -1,6 +1,8 @@
+// backend/src/routes/tournaments.js
 const express = require('express');
 const Tournament = require('../models/Tournament');
 const Casino = require('../models/Casino');
+const LiveTournamentState = require('../models/LiveTournamentState'); // <-- NEW
 const auth = require('../middleware/auth');
 const requireStaff = require('../middleware/requireStaff');
 const router = express.Router();
@@ -13,7 +15,6 @@ function ensureAssignedOrAdmin(req, casinoId) {
     : [];
   return ids.includes(String(casinoId));
 }
-
 
 /**
  * STEP 1c –– Normalise incoming payload
@@ -142,6 +143,20 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * NEW: Get live tournament state (public, read-only)
+ * Must be defined BEFORE '/:id' catch-all route.
+ */
+router.get('/:id/live', async (req, res) => {
+  try {
+    const live = await LiveTournamentState.findOne({ tournamentId: req.params.id }).lean();
+    // If no live doc yet, return null so clients can show "Scheduled" if relevant
+    res.json(live || null);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get live state' });
+  }
+});
+
+/**
  * Public: get one tournament
  */
 router.get('/:id', async (req, res) => {
@@ -221,6 +236,55 @@ router.delete('/:id', auth, requireStaff, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete tournament' });
+  }
+});
+
+/**
+ * NEW: Upsert live tournament state (staff/admin assigned to casino)
+ * Body: { status, dayIndex, levelIndex, remainingMs, totalLevels?, dayLabel? }
+ */
+router.patch('/:id/live', auth, requireStaff, async (req, res) => {
+  try {
+    // 1) Load the tournament for permission + casinoId
+    const t = await Tournament.findById(req.params.id).lean();
+    if (!t) return res.status(404).json({ error: 'Tournament not found' });
+
+    if (!ensureAssignedOrAdmin(req, t.casinoId)) {
+      return res.status(403).json({ error: 'Not assigned to this casino' });
+    }
+
+    // 2) Sanitize input
+    const allowedStatus = ['scheduled', 'running', 'paused', 'completed'];
+    const status = allowedStatus.includes(req.body?.status) ? req.body.status : 'paused';
+
+    const dayIndex = Math.max(0, Number(req.body?.dayIndex ?? 0) || 0);
+    const levelIndex = Math.max(0, Number(req.body?.levelIndex ?? 0) || 0);
+    const remainingMs = Math.max(0, Number(req.body?.remainingMs ?? 0) || 0);
+    const totalLevels = Math.max(0, Number(req.body?.totalLevels ?? 0) || 0);
+    const dayLabel = typeof req.body?.dayLabel === 'string' ? req.body.dayLabel : undefined;
+
+    // 3) Upsert the live state
+    const update = {
+      tournamentId: t._id,
+      casinoId: t.casinoId,
+      status,
+      dayIndex,
+      levelIndex,
+      remainingMs,
+      totalLevels,
+      updatedAt: new Date(),
+    };
+    if (dayLabel !== undefined) update.dayLabel = dayLabel;
+
+    const saved = await LiveTournamentState.findOneAndUpdate(
+      { tournamentId: t._id },
+      { $set: update },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+
+    res.json(saved);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to upsert live state' });
   }
 });
 

@@ -1,8 +1,9 @@
 // frontend/screens/TournamentDetailScreen.js
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, Button, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Button, Alert, TouchableOpacity } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import BasicClock from '../components/BasicClock';
 
 const API_BASE = 'http://192.168.0.178:5000';
 
@@ -11,15 +12,15 @@ export default function TournamentDetailScreen({ route, navigation }) {
   const [tournament, setTournament] = useState(initialTournament || {});
   const [canEdit, setCanEdit] = useState(false);
 
+  // NEW: track live state to change button label when started
+  const [live, setLive] = useState(null);
+
   const structure = Array.isArray(tournament?.structure) ? tournament.structure : [];
   const days = Array.isArray(tournament?.days) ? tournament.days : [];
 
-  // Determine edit permissions:
-  // - Admin: always true
-  // - Staff: only if assigned to this casino
+  // Determine edit permissions
   useEffect(() => {
     (async () => {
-      // quick fallback from cached role
       const cachedRole = await AsyncStorage.getItem('role');
       if (cachedRole === 'admin' || cachedRole === 'staff') setCanEdit(true);
 
@@ -32,12 +33,8 @@ export default function TournamentDetailScreen({ route, navigation }) {
         const me = await res.json();
         if (!res.ok) return;
 
-        const assigned = Array.isArray(me.assignedCasinoIds)
-          ? me.assignedCasinoIds.map(String)
-          : [];
-        const hasAccess =
-          me.role === 'admin' ||
-          (me.role === 'staff' && assigned.includes(String(casinoId)));
+        const assigned = Array.isArray(me.assignedCasinoIds) ? me.assignedCasinoIds.map(String) : [];
+        const hasAccess = me.role === 'admin' || (me.role === 'staff' && assigned.includes(String(casinoId)));
         setCanEdit(hasAccess);
       } catch {
         // ignore; UI still works read-only
@@ -47,11 +44,7 @@ export default function TournamentDetailScreen({ route, navigation }) {
 
   const parseJson = async (res) => {
     const t = await res.text();
-    try {
-      return t ? JSON.parse(t) : {};
-    } catch {
-      throw new Error('Invalid JSON');
-    }
+    try { return t ? JSON.parse(t) : {}; } catch { throw new Error('Invalid JSON'); }
   };
 
   useFocusEffect(
@@ -69,6 +62,34 @@ export default function TournamentDetailScreen({ route, navigation }) {
       if (tournament?._id) fetchTournament();
     }, [tournament?._id])
   );
+
+  // NEW: poll live state to switch the button title when started
+  useEffect(() => {
+    let cancelled = false;
+    let timer = null;
+
+    async function fetchLive() {
+      if (!tournament?._id) return;
+      try {
+        const res = await fetch(`${API_BASE}/api/tournaments/${tournament._id}/live`);
+        if (!res.ok) {
+          if (!cancelled) setLive(null);
+          return;
+        }
+        const data = await res.json();
+        if (!cancelled) setLive(data || null);
+      } catch {
+        if (!cancelled) setLive(null);
+      }
+    }
+
+    fetchLive();
+    timer = setInterval(fetchLive, 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [tournament?._id]);
 
   const handleDelete = () => {
     Alert.alert('Confirm Delete', 'Delete this tournament?', [
@@ -138,10 +159,26 @@ export default function TournamentDetailScreen({ route, navigation }) {
     );
   };
 
+  // NEW: compute button title based on live state
+  const started = !!(live && (live.status === 'running' || live.status === 'paused' || live.status === 'completed'));
+  const startBtnTitle = started ? '👀 View Clock' : '▶️ Start Tournament';
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.header}>{tournament?.name || 'Tournament'}</Text>
       <Text style={styles.subheader}>@ {casinoName || ''}</Text>
+
+      {/* BASIC CLOCK (read-only preview). Tap to open advanced clock. */}
+      <BasicClock
+        tournament={tournament}
+        onPress={() =>
+          navigation.navigate('StartTournament', {
+            tournament,
+            casinoName,
+            readOnly: !canEdit, // non-staff/admin view-only
+          })
+        }
+      />
 
       <Text style={styles.item}>🎯 Buy-In: £{tournament?.buyIn ?? 0}</Text>
       <Text style={styles.item}>💸 Rake: £{tournament?.rake ?? 0}</Text>
@@ -198,15 +235,16 @@ export default function TournamentDetailScreen({ route, navigation }) {
         !days.some((d) => Array.isArray(d.structure) && d.structure.length > 0)) &&
         renderStructureTable(structure)}
 
-      {/* NEW: Start Tournament button (admin or assigned staff) */}
+      {/* Admin/Staff actions */}
       {canEdit && (
         <View style={[styles.buttonRow, { marginTop: 16 }]}>
           <Button
-            title="▶️ Start Tournament"
+            title={startBtnTitle} // <-- changed dynamically
             onPress={() =>
               navigation.navigate('StartTournament', {
-                tournament: tournament,
+                tournament,
                 casinoName,
+                readOnly: false,
               })
             }
             color="#2563eb"

@@ -21,6 +21,24 @@ function getId(objOrId) {
   return String(objOrId._id || objOrId.id || objOrId.casinoId || '');
 }
 
+// Compute "Scheduled in Xh" only if within 24h
+function computeScheduledLabel(tournament) {
+  const soonestUTC = Array.isArray(tournament?.days) && tournament.days.length
+    ? tournament.days
+        .map(d => new Date(d.startTimeUTC).getTime())
+        .filter(n => !isNaN(n))
+        .sort((a,b)=>a-b)[0]
+    : (tournament?.dateTimeUTC ? new Date(tournament.dateTimeUTC).getTime() : null);
+  if (!soonestUTC) return null;
+  const now = Date.now();
+  const dt = soonestUTC - now;
+  if (dt > 0 && dt <= 24 * 60 * 60 * 1000) {
+    const h = Math.floor(dt / (60 * 60 * 1000));
+    return `Scheduled in ${h}h`;
+  }
+  return null;
+}
+
 export default function CasinoDetailScreen({ route, navigation }) {
   // Support either a full casino object or just { casinoId, casinoName }
   const { casino: casinoParam, casinoId: casinoIdParam, casinoName: casinoNameParam } = route.params || {};
@@ -37,36 +55,28 @@ export default function CasinoDetailScreen({ route, navigation }) {
   const [userRole, setUserRole] = useState(null);
   const [assignedIds, setAssignedIds] = useState([]); // strings from /me
 
+  // Live status map: { [tournamentId]: { status, levelIndex, remainingMs } }
+  const [liveMap, setLiveMap] = useState({});
+
   const fetchCasino = async (id) => {
     if (!id) return casinoParam || null;
     const res = await fetch(`${API_BASE}/api/casinos/${id}`);
     const text = await res.text();
-    try {
-      return text ? JSON.parse(text) : (casinoParam || null);
-    } catch {
-      return casinoParam || null;
-    }
+    try { return text ? JSON.parse(text) : (casinoParam || null); } catch { return casinoParam || null; }
   };
 
   const fetchTournaments = async (id) => {
     if (!id) return [];
     const res = await fetch(`${API_BASE}/api/casinos/${id}/tournaments`);
     const text = await res.text();
-    try {
-      const list = text ? JSON.parse(text) : [];
-      return Array.isArray(list) ? list : [];
-    } catch {
-      return [];
-    }
+    try { const list = text ? JSON.parse(text) : []; return Array.isArray(list) ? list : []; }
+    catch { return []; }
   };
 
   const fetchMe = async () => {
     try {
-      // Fallback: read cached role (non-authoritative)
       const cachedRole = await AsyncStorage.getItem('role');
       if (cachedRole) setUserRole(cachedRole);
-
-      // Authoritative: ask backend who we are
       const token = await AsyncStorage.getItem('token');
       if (!token) return;
       const resMe = await fetch(`${API_BASE}/api/auth/me`, {
@@ -77,9 +87,31 @@ export default function CasinoDetailScreen({ route, navigation }) {
         setUserRole(me.role || null);
         setAssignedIds(Array.isArray(me.assignedCasinoIds) ? me.assignedCasinoIds.map(String) : []);
       }
-    } catch {
-      // ignore — doesn't block casino/tournament load
-    }
+    } catch {}
+  };
+
+  const fetchLiveStates = async (list) => {
+    try {
+      const pairs = await Promise.all(
+        list.map(async (t) => {
+          const id = t?._id || t?.id || t?.tournamentId;
+          if (!id) return [null, null];
+          try {
+            const res = await fetch(`${API_BASE}/api/tournaments/${id}/live`);
+            if (!res.ok) return [id, null];
+            const data = await res.json();
+            return [id, data || null];
+          } catch {
+            return [id, null];
+          }
+        })
+      );
+      const map = {};
+      for (const [id, val] of pairs) {
+        if (id) map[id] = val;
+      }
+      setLiveMap(map);
+    } catch {}
   };
 
   // IMPORTANT: do NOT depend on `data` here; that caused the refresh loop.
@@ -89,7 +121,6 @@ export default function CasinoDetailScreen({ route, navigation }) {
       await fetchMe();
 
       if (!idToUse) {
-        // No ID at all — still show whatever we have from params
         setData(casinoParam || null);
         setTournaments([]);
         return;
@@ -100,9 +131,13 @@ export default function CasinoDetailScreen({ route, navigation }) {
 
       const list = await fetchTournaments(idToUse);
       setTournaments(list);
+
+      // fetch live statuses for the visible tournaments
+      await fetchLiveStates(list);
     } catch (err) {
       console.warn('CasinoDetail load error:', err?.message);
       setTournaments([]);
+      setLiveMap({});
     } finally {
       setLoading(false);
     }
@@ -113,6 +148,39 @@ export default function CasinoDetailScreen({ route, navigation }) {
     const unsubscribe = navigation.addListener('focus', load); // reload when screen regains focus
     return unsubscribe;
   }, [navigation, load]);
+
+  const renderStatusPill = (t) => {
+    const id = t?._id || t?.id || t?.tournamentId;
+    const live = id ? liveMap[id] : null;
+
+    if (live && live.status) {
+      const label =
+        live.status === 'running' ? 'Running'
+        : live.status === 'paused' ? 'Paused'
+        : live.status === 'completed' ? 'Completed'
+        : '—';
+      const pillStyle =
+        live.status === 'running' ? styles.pillRunning
+        : live.status === 'paused' ? styles.pillPaused
+        : styles.pillCompleted;
+      return (
+        <View style={[styles.pill, pillStyle]}>
+          <Text style={styles.pillText}>{label}</Text>
+        </View>
+      );
+    }
+
+    const scheduled = computeScheduledLabel(t);
+    if (scheduled) {
+      return (
+        <View style={[styles.pill, styles.pillScheduled]}>
+          <Text style={styles.pillText}>{scheduled}</Text>
+        </View>
+      );
+    }
+
+    return null;
+  };
 
   const renderTournament = ({ item }) => (
     <TouchableOpacity
@@ -125,7 +193,10 @@ export default function CasinoDetailScreen({ route, navigation }) {
         })
       }
     >
-      <Text style={styles.title}>{item?.name || 'Tournament'}</Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text style={styles.title}>{item?.name || 'Tournament'}</Text>
+        {renderStatusPill(item)}
+      </View>
       <Text style={styles.line}>Buy-In: £{item?.buyIn ?? 0} + £{item?.rake ?? 0}</Text>
       <Text style={styles.line}>
         Start: {item?.dateTimeUTC ? new Date(item.dateTimeUTC).toLocaleString() : '—'}
@@ -242,4 +313,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#444',
   },
+
+  // Status pills
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignSelf: 'flex-start',
+  },
+  pillText: { color: '#fff', fontWeight: '800', fontSize: 12 },
+  pillRunning: { backgroundColor: '#16a34a' },
+  pillPaused: { backgroundColor: '#f59e0b' },
+  pillCompleted: { backgroundColor: '#6b7280' },
+  pillScheduled: { backgroundColor: '#2563eb' },
 });

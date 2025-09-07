@@ -1,5 +1,5 @@
 // frontend/screens/StartTournamentScreen.js
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,23 +8,23 @@ import {
   ScrollView,
   Alert,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useKeepAwake } from 'expo-keep-awake';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import LiveClockService from '../services/LiveClockService';
+
+const API_BASE = 'http://192.168.0.178:5000';
 
 function mmss(ms) {
-  const t = Math.max(0, Math.floor(ms / 1000));
+  const t = Math.max(0, Math.floor((ms || 0) / 1000));
   const m = Math.floor(t / 60);
   const s = t % 60;
   const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
   return `${pad(m)}:${pad(s)}`;
 }
-
 function levelDurationMinutes(lv) {
-  // Support both durationMinutes (new) and duration (legacy)
   const val = typeof lv?.durationMinutes === 'number' ? lv.durationMinutes : lv?.duration;
-  return typeof val === 'number' && val > 0 ? val : 20; // sensible default
+  return typeof val === 'number' && val > 0 ? val : 20;
 }
-
 function levelLabel(lv, idx) {
   if (lv?.isBreak) return `Break`;
   const n = lv?.level ?? idx + 1;
@@ -33,213 +33,97 @@ function levelLabel(lv, idx) {
   const ante = lv?.ante ?? 0;
   return ante ? `Level ${n} — ${sb}/${bb}/${ante}` : `Level ${n} — ${sb}/${bb}`;
 }
-
 function nextBreakInfo(levels, currentIdx, msLeftInLevel) {
   if (!Array.isArray(levels) || levels.length === 0) return { inMs: null, breakIdx: null };
   let acc = msLeftInLevel;
   for (let i = currentIdx + 1; i < levels.length; i++) {
     const lv = levels[i];
-    if (lv?.isBreak) {
-      return { inMs: acc, breakIdx: i };
-    }
+    if (lv?.isBreak) return { inMs: acc, breakIdx: i };
     acc += levelDurationMinutes(lv) * 60 * 1000;
   }
   return { inMs: null, breakIdx: null };
 }
 
-export default function StartTournamentScreen({ route, navigation }) {
+export default function StartTournamentScreen({ route }) {
   useKeepAwake(); // prevent device sleep
 
-  // Expect params from TournamentDetailScreen
-  const { tournament, casinoName } = route.params || {};
-  const tournamentId = tournament?._id || tournament?.id || tournament?.tournamentId || 'unknown';
+  const { tournament, casinoName, readOnly } = route.params || {};
+  const [snap, setSnap] = useState(LiveClockService.getState());
 
-  // Choose levels source (global structure OR per-day)
-  const [selectedDayIndex, setSelectedDayIndex] = useState(0);
+  // Initialize service and subscribe (do NOT stop on unmount)
+  useEffect(() => {
+    LiveClockService.init({ tournament, dayIndex: snap.dayIndex ?? 0 });
+    const unsub = LiveClockService.subscribe(setSnap);
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tournament?._id]);
+
+  // Convenience
+  const levels = snap.levels || [];
   const hasDays = Array.isArray(tournament?.days) && tournament.days.length > 0;
 
-  const levels = useMemo(() => {
-    if (hasDays) {
-      const idx = Math.min(Math.max(0, selectedDayIndex), tournament.days.length - 1);
-      return Array.isArray(tournament.days[idx]?.structure) ? tournament.days[idx].structure : [];
-    }
-    return Array.isArray(tournament?.structure) ? tournament.structure : [];
-  }, [hasDays, selectedDayIndex, tournament]);
-
-  // Core state
-  const [status, setStatus] = useState('not_started'); // 'not_started' | 'running' | 'paused' | 'finished'
-  const [currentLevelIndex, setCurrentLevelIndex] = useState(0);
-  const [millisLeft, setMillisLeft] = useState(
-    levels.length ? levelDurationMinutes(levels[0]) * 60 * 1000 : 0
-  );
-  const [autoAdvance, setAutoAdvance] = useState(true);
-
-  // Persist state key (per tournament+day)
-  const storageKey = useMemo(
-    () => `clock:${String(tournamentId)}:${hasDays ? selectedDayIndex : 0}`,
-    [tournamentId, hasDays, selectedDayIndex]
-  );
-
-  // Load saved state (if any) when tournament/day changes
-  useEffect(() => {
-    let isCancelled = false;
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(storageKey);
-        if (!raw) return;
-        const saved = JSON.parse(raw);
-        if (isCancelled) return;
-
-        // Only restore if structure length matches (simple safety)
-        if (Array.isArray(levels) && levels.length > 0) {
-          setStatus(saved.status ?? 'paused');
-          const safeIdx =
-            typeof saved.currentLevelIndex === 'number'
-              ? Math.min(Math.max(0, saved.currentLevelIndex), levels.length - 1)
-              : 0;
-          setCurrentLevelIndex(safeIdx);
-
-          const dur = levelDurationMinutes(levels[safeIdx]) * 60 * 1000;
-          const ms = typeof saved.millisLeft === 'number' ? Math.min(Math.max(0, saved.millisLeft), dur) : dur;
-          setMillisLeft(ms);
-
-          setAutoAdvance(Boolean(saved.autoAdvance));
-        }
-      } catch {
-        // ignore
-      }
-    })();
-    return () => {
-      isCancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [storageKey]);
-
-  // Save on important changes
-  useEffect(() => {
-    (async () => {
-      const toSave = {
-        status,
-        currentLevelIndex,
-        millisLeft,
-        autoAdvance,
-        savedAt: Date.now(),
-      };
-      try {
-        await AsyncStorage.setItem(storageKey, JSON.stringify(toSave));
-      } catch {
-        // ignore
-      }
-    })();
-  }, [status, currentLevelIndex, millisLeft, autoAdvance, storageKey]);
-
-  // Ticker
-  const tickRef = useRef(null);
-  useEffect(() => {
-    if (status !== 'running') {
-      if (tickRef.current) clearInterval(tickRef.current);
-      tickRef.current = null;
-      return;
-    }
-    tickRef.current = setInterval(() => {
-      setMillisLeft((prev) => {
-        const next = prev - 1000;
-        if (next <= 0) {
-          // End of level
-          if (autoAdvance) {
-            advanceLevel('next', true);
-            return 0;
-          } else {
-            setStatus('paused');
-            return 0;
-          }
-        }
-        return next;
-      });
-    }, 1000);
-
-    return () => {
-      if (tickRef.current) clearInterval(tickRef.current);
-      tickRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, autoAdvance, currentLevelIndex, levels]);
-
-  // Helpers to move levels
-  const setLevel = useCallback(
-    (idx, preserveRunning = false) => {
-      if (!Array.isArray(levels) || levels.length === 0) return;
-      const clamped = Math.min(Math.max(0, idx), levels.length - 1);
-      setCurrentLevelIndex(clamped);
-      const ms = levelDurationMinutes(levels[clamped]) * 60 * 1000;
-      setMillisLeft(ms);
-      if (!preserveRunning) setStatus('paused'); // default to paused when jumping
-    },
-    [levels]
-  );
-
-  const advanceLevel = useCallback(
-    (dir = 'next', fromAuto = false) => {
-      if (!Array.isArray(levels) || levels.length === 0) return;
-      let nextIdx = currentLevelIndex + (dir === 'prev' ? -1 : 1);
-      if (nextIdx >= levels.length) {
-        setStatus('finished');
-        nextIdx = levels.length - 1;
-      } else if (nextIdx < 0) {
-        nextIdx = 0;
-      }
-      setCurrentLevelIndex(nextIdx);
-      const ms = levelDurationMinutes(levels[nextIdx]) * 60 * 1000;
-      setMillisLeft(ms);
-      if (!fromAuto) setStatus('paused');
-    },
-    [currentLevelIndex, levels]
-  );
-
-  const addMinutes = useCallback((deltaMinutes) => {
-    setMillisLeft((prev) => Math.max(0, prev + deltaMinutes * 60 * 1000));
-  }, []);
-
-  const setPresetTime = useCallback(() => {
-    Alert.alert(
-      'Set Time',
-      'Choose a preset:',
-      [
-        { text: '5 minutes', onPress: () => setMillisLeft(5 * 60 * 1000) },
-        { text: '10 minutes', onPress: () => setMillisLeft(10 * 60 * 1000) },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-      { cancelable: true }
-    );
-  }, []);
-
-  // Derived
-  const lv = levels[currentLevelIndex] || null;
+  // Derived UI
+  const lv = levels[snap.currentLevelIndex || 0] || null;
   const durMs = lv ? levelDurationMinutes(lv) * 60 * 1000 : 0;
-  const elapsed = durMs > 0 ? Math.min(1, 1 - millisLeft / durMs) : 0;
+  const elapsed = durMs > 0 ? Math.min(1, 1 - (snap.remainingMs || 0) / durMs) : 0;
 
-  const { inMs: nextBreakMs, breakIdx } = nextBreakInfo(levels, currentLevelIndex, millisLeft);
+  const { inMs: nextBreakMs } = nextBreakInfo(
+    levels,
+    snap.currentLevelIndex || 0,
+    snap.remainingMs || 0
+  );
   const nextLabel =
-    currentLevelIndex + 1 < levels.length
-      ? levelLabel(levels[currentLevelIndex + 1], currentLevelIndex + 1)
+    (snap.currentLevelIndex || 0) + 1 < levels.length
+      ? levelLabel(levels[(snap.currentLevelIndex || 0) + 1], (snap.currentLevelIndex || 0) + 1)
       : '—';
 
   const upcoming = useMemo(() => {
     const arr = [];
-    for (let i = currentLevelIndex + 1; i < Math.min(levels.length, currentLevelIndex + 1 + 4); i++) {
+    const start = (snap.currentLevelIndex || 0) + 1;
+    for (let i = start; i < Math.min(levels.length, start + 4); i++) {
       arr.push({ idx: i, lv: levels[i] });
     }
     return arr;
-  }, [levels, currentLevelIndex]);
+  }, [levels, snap.currentLevelIndex]);
 
-  // Day selection change: reset to level 0 (paused)
-  const changeDay = (newIdx) => {
-    setSelectedDayIndex(newIdx);
-    setStatus('paused');
-    setCurrentLevelIndex(0);
-    const firstDur = levels.length ? levelDurationMinutes(levels[0]) * 60 * 1000 : 0;
-    setMillisLeft(firstDur);
+  const onChangeDay = (idx) => {
+    LiveClockService.setDay(idx);
   };
+
+  // ---- Minimal backend sync for Live State (safe to keep even before backend route exists) ----
+  useEffect(() => {
+    let cancelled = false;
+    const send = async () => {
+      try {
+        const tournamentId = tournament?._id || tournament?.id || tournament?.tournamentId;
+        if (!tournamentId) return;
+        const token = await AsyncStorage.getItem('token');
+        const payload = {
+          status:
+            snap.status === 'finished' ? 'completed'
+            : snap.status === 'running' ? 'running'
+            : 'paused', // 'not_started' maps to 'paused'
+          dayIndex: snap.dayIndex ?? 0,
+          levelIndex: snap.currentLevelIndex ?? 0,
+          remainingMs: snap.remainingMs ?? 0,
+          totalLevels: levels.length,
+          dayLabel: hasDays ? (tournament.days[snap.dayIndex ?? 0]?.label || `Day ${(snap.dayIndex ?? 0)+1}`) : 'Main',
+        };
+        await fetch(`${API_BASE}/api/tournaments/${tournamentId}/live`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        }).catch(() => {});
+      } catch {}
+    };
+    // Throttle a little: send after small delay to batch rapid changes
+    const t = setTimeout(() => { if (!cancelled) send(); }, 800);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.status, snap.currentLevelIndex, snap.remainingMs, snap.dayIndex]);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -253,10 +137,16 @@ export default function StartTournamentScreen({ route, navigation }) {
           {tournament.days.map((d, idx) => (
             <TouchableOpacity
               key={idx}
-              style={[styles.dayChip, idx === selectedDayIndex && styles.dayChipActive]}
-              onPress={() => changeDay(idx)}
+              style={[styles.dayChip, idx === (snap.dayIndex ?? 0) && styles.dayChipActive]}
+              onPress={() => onChangeDay(idx)}
+              disabled={!!readOnly}
             >
-              <Text style={[styles.dayChipText, idx === selectedDayIndex && styles.dayChipTextActive]}>
+              <Text
+                style={[
+                  styles.dayChipText,
+                  idx === (snap.dayIndex ?? 0) && styles.dayChipTextActive,
+                ]}
+              >
                 {d?.label || `Day ${idx + 1}`}
               </Text>
             </TouchableOpacity>
@@ -266,13 +156,11 @@ export default function StartTournamentScreen({ route, navigation }) {
 
       {/* Big timer card */}
       <View style={[styles.timerCard, lv?.isBreak && styles.breakCard]}>
-        <Text style={styles.timerBig}>{mmss(millisLeft)}</Text>
+        <Text style={styles.timerBig}>{mmss(snap.remainingMs || 0)}</Text>
         <Text style={styles.levelLine}>
-          {lv ? levelLabel(lv, currentLevelIndex) : 'No levels'}
+          {lv ? levelLabel(lv, snap.currentLevelIndex || 0) : 'No levels'}
         </Text>
-        <Text style={styles.levelSub}>
-          Length: {Math.round(durMs / 60000)} min
-        </Text>
+        <Text style={styles.levelSub}>Length: {Math.round(durMs / 60000)} min</Text>
 
         {/* progress bar */}
         <View style={styles.barOuter}>
@@ -284,9 +172,7 @@ export default function StartTournamentScreen({ route, navigation }) {
       <View style={styles.infoRow}>
         <View style={styles.infoCol}>
           <Text style={styles.infoLabel}>Next break in</Text>
-          <Text style={styles.infoValue}>
-            {nextBreakMs != null ? mmss(nextBreakMs) : '—'}
-          </Text>
+          <Text style={styles.infoValue}>{nextBreakMs != null ? mmss(nextBreakMs) : '—'}</Text>
         </View>
         <View style={styles.infoCol}>
           <Text style={styles.infoLabel}>Next level</Text>
@@ -310,87 +196,113 @@ export default function StartTournamentScreen({ route, navigation }) {
       {/* Status strip */}
       <View style={styles.statusStrip}>
         <Text style={styles.statusText}>
-          {status === 'not_started' ? 'Not started' : status === 'running' ? 'Running' : status === 'paused' ? 'Paused' : 'Finished'}
+          {snap.status === 'not_started'
+            ? 'Not started'
+            : snap.status === 'running'
+            ? 'Running'
+            : snap.status === 'paused'
+            ? 'Paused'
+            : 'Finished'}
         </Text>
         {hasDays && (
-          <Text style={styles.statusText}>• {tournament.days[selectedDayIndex]?.label || `Day ${selectedDayIndex + 1}`}</Text>
+          <Text style={styles.statusText}>
+            • {tournament.days[snap.dayIndex ?? 0]?.label || `Day ${(snap.dayIndex ?? 0) + 1}`}
+          </Text>
         )}
         <Text style={styles.statusText}>• {new Date().toLocaleTimeString()}</Text>
       </View>
 
-      {/* Controls */}
-      <View style={styles.controls}>
-        {/* Start/Pause/Resume */}
-        {status !== 'running' ? (
-          <TouchableOpacity
-            style={[styles.btn, styles.btnPrimary]}
-            onPress={() => {
-              if (levels.length === 0) return;
-              if (status === 'not_started' || status === 'paused') setStatus('running');
-              if (status === 'finished') {
-                setLevel(0);
-                setStatus('running');
+      {/* Controls (hidden/disabled in readOnly mode) */}
+      {!readOnly ? (
+        <View style={styles.controls}>
+          {/* Start/Pause/Resume */}
+          {snap.status !== 'running' ? (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnPrimary]}
+              onPress={() => LiveClockService.startOrResume()}
+            >
+              <Text style={styles.btnText}>
+                {snap.status === 'finished' ? 'Restart' : snap.status === 'paused' ? 'Resume' : 'Start'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnWarn]}
+              onPress={() => LiveClockService.pause()}
+            >
+              <Text style={styles.btnText}>Pause</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Prev/Next */}
+          <View style={styles.row}>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnGhost]}
+              onPress={() =>
+                Alert.alert('Previous level', 'Go to previous level?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Go', style: 'destructive', onPress: () => LiveClockService.prevLevel() },
+                ])
               }
-            }}
-          >
-            <Text style={styles.btnText}>{status === 'finished' ? 'Restart' : status === 'paused' ? 'Resume' : 'Start'}</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.btn, styles.btnWarn]}
-            onPress={() => setStatus('paused')}
-          >
-            <Text style={styles.btnText}>Pause</Text>
-          </TouchableOpacity>
-        )}
+            >
+              <Text style={styles.btnText}>Prev</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnGhost]}
+              onPress={() =>
+                Alert.alert('Next level', 'Advance to next level?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Go', onPress: () => LiveClockService.nextLevel() },
+                ])
+              }
+            >
+              <Text style={styles.btnText}>Next</Text>
+            </TouchableOpacity>
+          </View>
 
-        {/* Prev/Next */}
-        <View style={styles.row}>
+          {/* Time adjust */}
+          <View style={styles.row}>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnGhost]}
+              onPress={() => LiveClockService.addMinutes(1)}
+            >
+              <Text style={styles.btnText}>+1 min</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnGhost]}
+              onPress={() => LiveClockService.addMinutes(-1)}
+            >
+              <Text style={styles.btnText}>-1 min</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnGhost]}
+              onPress={() =>
+                Alert.alert('Set Time', 'Choose a preset:', [
+                  { text: '5 minutes', onPress: () => LiveClockService.setPresetMs(5 * 60 * 1000) },
+                  { text: '10 minutes', onPress: () => LiveClockService.setPresetMs(10 * 60 * 1000) },
+                  { text: 'Cancel', style: 'cancel' },
+                ])
+              }
+            >
+              <Text style={styles.btnText}>Set time</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Auto-advance toggle */}
           <TouchableOpacity
-            style={[styles.btn, styles.btnGhost]}
-            onPress={() =>
-              Alert.alert('Previous level', 'Go to previous level?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Go', style: 'destructive', onPress: () => advanceLevel('prev') },
-              ])
-            }
+            style={[styles.btn, snap.autoAdvance ? styles.btnPrimary : styles.btnGhost]}
+            onPress={() => LiveClockService.setAutoAdvance(!snap.autoAdvance)}
           >
-            <Text style={styles.btnText}>Prev</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnGhost]}
-            onPress={() =>
-              Alert.alert('Next level', 'Advance to next level?', [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Go', onPress: () => advanceLevel('next') },
-              ])
-            }
-          >
-            <Text style={styles.btnText}>Next</Text>
+            <Text style={styles.btnText}>Auto-advance: {snap.autoAdvance ? 'ON' : 'OFF'}</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Time adjust */}
-        <View style={styles.row}>
-          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={() => addMinutes(1)}>
-            <Text style={styles.btnText}>+1 min</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={() => addMinutes(-1)}>
-            <Text style={styles.btnText}>-1 min</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnGhost]} onPress={setPresetTime}>
-            <Text style={styles.btnText}>Set time</Text>
-          </TouchableOpacity>
+      ) : (
+        <View style={[styles.readOnlyBanner]}>
+          <Text style={{ color: '#111827', fontWeight: '700' }}>
+            View-only mode — controls disabled
+          </Text>
         </View>
-
-        {/* Auto-advance toggle */}
-        <TouchableOpacity
-          style={[styles.btn, autoAdvance ? styles.btnPrimary : styles.btnGhost]}
-          onPress={() => setAutoAdvance((v) => !v)}
-        >
-          <Text style={styles.btnText}>Auto-advance: {autoAdvance ? 'ON' : 'OFF'}</Text>
-        </TouchableOpacity>
-      </View>
+      )}
     </ScrollView>
   );
 }
@@ -450,4 +362,11 @@ const styles = StyleSheet.create({
   btnWarn: { backgroundColor: '#b91c1c' },
   btnGhost: { backgroundColor: '#e5e7eb' },
   btnText: { color: '#fff', fontWeight: '800' },
+
+  readOnlyBanner: {
+    backgroundColor: '#fde68a',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+  },
 });
