@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 import { logout } from '../services/AuthService';
 import { useAuth } from '../context/AuthContext'; // ⬅️ moved import here
+import theme from '../theme';
 
 const API_BASE = 'http://192.168.0.178:5000';
 
@@ -97,7 +98,7 @@ export default function ProfileScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.muted}>Loading your profile…</Text>
       </View>
     );
@@ -186,10 +187,10 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   centerPad: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
-  muted: { marginTop: 8, color: '#555' },
-  mutedSmall: { marginTop: 8, color: '#6b7280', fontSize: 12 },
-  container: { padding: 16, gap: 16 },
-  title: { fontSize: 28, fontWeight: '700' },
+  muted: { marginTop: 8, color: theme.colors.grey, fontFamily: theme.fonts.body },
+  mutedSmall: { marginTop: 8, color: theme.colors.grey, fontSize: 12, fontFamily: theme.fonts.body },
+  container: { padding: 16, gap: 16, backgroundColor: theme.colors.backgroundLight },
+  title: { fontSize: 28, color: theme.colors.primary, fontFamily: theme.fonts.heading },
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -200,8 +201,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
     gap: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(46,91,67,0.08)', // subtle green tint
   },
-  sectionTitle: { fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  sectionTitle: { fontSize: 18, marginBottom: 8, color: '#111827', fontFamily: theme.fonts.heading },
   rowButtons: { flexDirection: 'row', gap: 8, marginTop: 4 },
   pill: {
     paddingVertical: 10,
@@ -209,19 +212,26 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#e5e7eb',
   },
-  pillActive: { backgroundColor: '#111827' },
-  pillText: { fontSize: 14, fontWeight: '600', color: '#111827' },
-  pillTextActive: { color: '#fff' },
-  label: { fontSize: 12, color: '#666', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8 },
-  value: { fontSize: 16, fontWeight: '600' },
+  pillActive: { backgroundColor: theme.colors.primary },
+  pillText: { fontSize: 14, color: '#111827', fontFamily: theme.fonts.body },
+  pillTextActive: { color: '#fff', fontFamily: theme.fonts.body },
+  label: {
+    fontSize: 12,
+    color: '#666',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 8,
+    fontFamily: theme.fonts.body,
+  },
+  value: { fontSize: 16, color: '#111827', fontFamily: theme.fonts.body },
   button: {
-    backgroundColor: '#111827',
+    backgroundColor: theme.colors.primary,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
   },
-  secondary: { backgroundColor: '#334155' },
+  secondary: { opacity: 0.95 }, // keep same style but allow separate usage if needed
   danger: { backgroundColor: '#b91c1c' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  error: { color: '#b91c1c', marginBottom: 12 },
+  buttonText: { color: '#fff', fontSize: 16, fontFamily: theme.fonts.heading },
+  error: { color: '#b91c1c', marginBottom: 12, fontFamily: theme.fonts.body },
 });

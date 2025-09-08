@@ -1,6 +1,8 @@
 // frontend/components/BasicClock.js
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import theme from '../theme';
 
 const API_BASE = 'http://192.168.0.178:5000';
 
@@ -15,9 +17,18 @@ function levelDurationMinutes(lv) {
   const val = typeof lv?.durationMinutes === 'number' ? lv.durationMinutes : lv?.duration;
   return typeof val === 'number' && val > 0 ? val : 20;
 }
-function levelLabel(lv, idx) {
+// playable numbering helper
+function playableNumberAt(levels, idx) {
+  let count = 0;
+  for (let i = 0; i <= idx; i++) {
+    if (!levels[i]?.isBreak) count++;
+  }
+  return count;
+}
+// use playable numbering in label
+function levelLabel(lv, idx, allLevels) {
   if (lv?.isBreak) return 'Break';
-  const n = lv?.level ?? idx + 1;
+  const n = Array.isArray(allLevels) ? playableNumberAt(allLevels, idx) : (lv?.level ?? idx + 1);
   const sb = lv?.smallBlind ?? 0;
   const bb = lv?.bigBlind ?? 0;
   const ante = lv?.ante ?? 0;
@@ -32,7 +43,7 @@ function pickLevels(tournament, dayIndex) {
   return Array.isArray(tournament?.structure) ? tournament.structure : [];
 }
 
-export default function BasicClock({ tournament, onPress }) {
+export default function BasicClock({ tournament, onPress, showChevron = false }) {
   const [live, setLive] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -86,7 +97,7 @@ export default function BasicClock({ tournament, onPress }) {
     // live present
     const levels = pickLevels(tournament, live.dayIndex ?? 0);
     const lv = levels[live.levelIndex ?? 0] || null;
-    const lvlText = lv ? levelLabel(lv, live.levelIndex ?? 0) : 'Level —';
+    const lvlText = lv ? levelLabel(lv, live.levelIndex ?? 0, levels) : 'Level —';
     const status = (live.status === 'completed') ? 'Completed'
                   : (live.status === 'running') ? 'Running'
                   : (live.status === 'paused') ? 'Paused'
@@ -99,32 +110,44 @@ export default function BasicClock({ tournament, onPress }) {
   }, [live, tournament]);
 
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={styles.wrap}>
+    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.wrap}>
       <View style={styles.row}>
         <Text style={styles.status}>{statusText}</Text>
         <Text style={styles.timer}>{timeText}</Text>
       </View>
+
       <Text style={styles.level}>{label}</Text>
+
+      {showChevron && (
+        <Ionicons name="chevron-forward" size={20} color="#FFFFFF" style={styles.chevron} />
+      )}
+
       {!!err && <Text style={styles.err}>⚠ {String(err)}</Text>}
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
+  // Transparent + bordered so it drops onto green cards nicely
   wrap: {
-    backgroundColor: '#fff',
+    backgroundColor: 'transparent',
     borderRadius: 12,
     padding: 12,
     marginTop: 8,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+    position: 'relative',
   },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  status: { fontWeight: '800', color: '#111827' },
-  timer: { fontWeight: '900', fontSize: 20, letterSpacing: 1 },
-  level: { marginTop: 4, color: '#374151' },
-  err: { marginTop: 6, color: '#b91c1c' },
+
+  // Typography (white to contrast green background)
+  status: { fontFamily: theme.fonts.heading, color: '#FFFFFF' },
+  timer: { fontFamily: theme.fonts.heading, fontSize: 20, letterSpacing: 1, color: '#FFFFFF' },
+  level: { marginTop: 4, color: 'rgba(255,255,255,0.92)', fontFamily: theme.fonts.body },
+
+  // Errors (keep readable on green)
+  err: { marginTop: 6, color: '#FFE4E6', fontFamily: theme.fonts.body },
+
+  // Optional chevron
+  chevron: { position: 'absolute', right: 10, top: 10 },
 });

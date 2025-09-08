@@ -1,3 +1,4 @@
+// frontend/poker-app-frontend/screens/EditTournamentScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, Button, StyleSheet, ScrollView, Alert,
@@ -55,7 +56,7 @@ export default function EditTournamentScreen() {
   const [gameType, setGameType] = useState('No Limit Hold’em');
   const [notes, setNotes] = useState('');
 
-  // Stack & prize pool (RESTORED)
+  // Stack & prize pool
   const [startingStack, setStartingStack] = useState('');
   const [prizePool, setPrizePool] = useState('');
 
@@ -65,6 +66,9 @@ export default function EditTournamentScreen() {
   const [reentriesAllowed, setReentriesAllowed] = useState('');
   const [isBounty, setIsBounty] = useState(false);
   const [bountyAmount, setBountyAmount] = useState('');
+
+  // NEW: Late Registration (levels)
+  const [lateRegLevels, setLateRegLevels] = useState('');
 
   // Multi-day
   const [isMultiDay, setIsMultiDay] = useState(false);
@@ -111,6 +115,9 @@ export default function EditTournamentScreen() {
 
         setIsBounty((data?.bounty ?? 0) > 0);
         setBountyAmount(data?.bounty != null ? String(data.bounty) : '');
+
+        // NEW: prefill late reg levels
+        setLateRegLevels(data?.lateRegLevels != null ? String(data.lateRegLevels) : '');
 
         const dayList = Array.isArray(data?.days) ? data.days : [];
         setIsMultiDay(dayList.length > 0);
@@ -202,14 +209,17 @@ export default function EditTournamentScreen() {
     Keyboard.dismiss();
   };
 
-  const toBackendDays = () =>
-    isMultiDay
+  // ⬇️ IMPORTANT: for multi-day, write structure into each day when "use same structure" is on
+  const toBackendDays = () => {
+    const global = toBackendStructure(structure);
+    return isMultiDay
       ? days.map((d, i) => ({
           label: d.label,
           startTimeUTC: d.startTime.toISOString(),
-          structure: useSameStructure ? [] : toBackendStructure(dayStructures[i] || []),
+          structure: useSameStructure ? global : toBackendStructure(dayStructures[i] || []),
         }))
       : [];
+  };
 
   const computeDateTimeUTC = () => {
     if (!isMultiDay || days.length === 0) return date.toISOString();
@@ -227,14 +237,18 @@ export default function EditTournamentScreen() {
       dateTimeUTC: computeDateTimeUTC(),
       buyIn: Number(buyIn),
       rake: Number(rake),
-      prizePool: prizePool ? Number(prizePool) || 0 : 0,   // RESTORED
+      prizePool: prizePool ? Number(prizePool) || 0 : 0,
       gameType,
       notes: notes.trim(),
-      startingStack: startingStack ? Number(startingStack) || 0 : 0, // RESTORED
+      startingStack: startingStack ? Number(startingStack) || 0 : 0,
       reEntry: allowReEntry || unlimitedReEntry,
       reEntryUnlimited: unlimitedReEntry,
       reEntryCount: unlimitedReEntry ? 0 : (Number(reentriesAllowed) || 0),
-      structure: useSameStructure ? toBackendStructure(structure) : [],
+
+      // NEW: send late registration levels
+      lateRegLevels: lateRegLevels ? Number(lateRegLevels) || 0 : 0,
+
+      structure: toBackendStructure(structure),
       days: toBackendDays(),
       bounty: (isBounty ? Number(bountyAmount) || 0 : 0),
     };
@@ -312,6 +326,15 @@ export default function EditTournamentScreen() {
           </>
         )}
 
+        {/* NEW: Late Registration */}
+        <Text style={styles.section}>⏱ Late Registration</Text>
+        <NumericInput
+          style={styles.input}
+          placeholder="Late reg lasts for (levels)"
+          value={lateRegLevels}
+          onChangeText={setLateRegLevels}
+        />
+    
         <Text style={styles.section}>🏆 Bounty</Text>
         <View style={styles.row}>
           <Text>Bounty tournament?</Text>

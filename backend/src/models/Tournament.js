@@ -1,3 +1,4 @@
+// backend/src/models/Tournament.js
 const mongoose = require('mongoose');
 
 const LevelSchema = new mongoose.Schema(
@@ -20,7 +21,6 @@ const BlindLevelSchema = new mongoose.Schema({
   durationMinutes: { type: Number, required: true },
   isBreak: { type: Boolean, default: false },
 }, { _id: false });
-
 
 const TournamentSchema = new mongoose.Schema({
   casinoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Casino', required: true, index: true },
@@ -46,8 +46,4 @@ const TournamentSchema = new mongoose.Schema({
   status: { type: String, enum: ['scheduled','running','completed','cancelled'], default: 'scheduled', index: true },
 }, { timestamps: true });
 
-
-
-
 module.exports = mongoose.model('Tournament', TournamentSchema);
-

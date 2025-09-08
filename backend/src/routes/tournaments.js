@@ -28,7 +28,7 @@ function normalizeTournamentPayload(body) {
   // Coerce simple numbers if they arrive as strings
   const numKeys = [
     'buyIn', 'rake', 'bounty', 'startingStack',
-    'reEntryCount', 'lateRegLevels', 'prizepool'
+    'reEntryCount', 'lateRegLevels', 'prizePool' // <-- fixed key
   ];
   numKeys.forEach((k) => {
     if (data[k] !== undefined && data[k] !== null && data[k] !== '') {
@@ -46,7 +46,6 @@ function normalizeTournamentPayload(body) {
   // Normalise structure array if provided
   if (Array.isArray(data.structure)) {
     data.structure = data.structure.map((lv, idx) => {
-      // If a UI "break" came through pre-normalised, just keep it
       if (lv.isBreak) {
         return {
           level: 0,
@@ -66,6 +65,8 @@ function normalizeTournamentPayload(body) {
         isBreak: false,
       };
     });
+  } else {
+    data.structure = [];
   }
 
   // Normalise multi-day info
@@ -106,6 +107,13 @@ function normalizeTournamentPayload(body) {
         return dayOut;
       })
       .sort((a, b) => new Date(a.startTimeUTC) - new Date(b.startTimeUTC));
+
+    // ⬇️ Server-side guard: if root structure exists, copy to any empty day
+    if (Array.isArray(data.structure) && data.structure.length > 0) {
+      days = days.map((d) =>
+        (Array.isArray(d.structure) && d.structure.length > 0) ? d : { ...d, structure: data.structure }
+      );
+    }
 
     data.days = days;
 

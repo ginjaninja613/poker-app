@@ -1,4 +1,4 @@
-// frontend/screens/StartTournamentScreen.js
+// frontend/poker-app-frontend/screens/StartTournamentScreen.js
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
@@ -25,9 +25,18 @@ function levelDurationMinutes(lv) {
   const val = typeof lv?.durationMinutes === 'number' ? lv.durationMinutes : lv?.duration;
   return typeof val === 'number' && val > 0 ? val : 20;
 }
-function levelLabel(lv, idx) {
+// count only playable (non-break) levels up to idx
+function playableNumberAt(levels, idx) {
+  let count = 0;
+  for (let i = 0; i <= idx; i++) {
+    if (!levels[i]?.isBreak) count++;
+  }
+  return count;
+}
+// labels using playable numbering (breaks don’t increment)
+function levelLabel(lv, idx, allLevels) {
   if (lv?.isBreak) return `Break`;
-  const n = lv?.level ?? idx + 1;
+  const n = Array.isArray(allLevels) ? playableNumberAt(allLevels, idx) : (lv?.level ?? idx + 1);
   const sb = lv?.smallBlind ?? 0;
   const bb = lv?.bigBlind ?? 0;
   const ante = lv?.ante ?? 0;
@@ -74,7 +83,7 @@ export default function StartTournamentScreen({ route }) {
   );
   const nextLabel =
     (snap.currentLevelIndex || 0) + 1 < levels.length
-      ? levelLabel(levels[(snap.currentLevelIndex || 0) + 1], (snap.currentLevelIndex || 0) + 1)
+      ? levelLabel(levels[(snap.currentLevelIndex || 0) + 1], (snap.currentLevelIndex || 0) + 1, levels)
       : '—';
 
   const upcoming = useMemo(() => {
@@ -90,7 +99,7 @@ export default function StartTournamentScreen({ route }) {
     LiveClockService.setDay(idx);
   };
 
-  // ---- Minimal backend sync for Live State (safe to keep even before backend route exists) ----
+  // ---- Minimal backend sync for Live State ----
   useEffect(() => {
     let cancelled = false;
     const send = async () => {
@@ -119,7 +128,6 @@ export default function StartTournamentScreen({ route }) {
         }).catch(() => {});
       } catch {}
     };
-    // Throttle a little: send after small delay to batch rapid changes
     const t = setTimeout(() => { if (!cancelled) send(); }, 800);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -158,7 +166,7 @@ export default function StartTournamentScreen({ route }) {
       <View style={[styles.timerCard, lv?.isBreak && styles.breakCard]}>
         <Text style={styles.timerBig}>{mmss(snap.remainingMs || 0)}</Text>
         <Text style={styles.levelLine}>
-          {lv ? levelLabel(lv, snap.currentLevelIndex || 0) : 'No levels'}
+          {lv ? levelLabel(lv, snap.currentLevelIndex || 0, levels) : 'No levels'}
         </Text>
         <Text style={styles.levelSub}>Length: {Math.round(durMs / 60000)} min</Text>
 
@@ -187,7 +195,7 @@ export default function StartTournamentScreen({ route }) {
         ) : (
           upcoming.map((u) => (
             <Text key={u.idx} style={styles.upcomingItem}>
-              {levelLabel(u.lv, u.idx)} • {levelDurationMinutes(u.lv)} min
+              {levelLabel(u.lv, u.idx, levels)} • {levelDurationMinutes(u.lv)} min
             </Text>
           ))
         )}

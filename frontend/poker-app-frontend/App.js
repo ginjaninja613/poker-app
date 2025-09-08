@@ -5,6 +5,8 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFonts } from 'expo-font';
+import { ActivityIndicator, View } from 'react-native';
 
 import EditTournamentScreen from './screens/EditTournamentScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -15,10 +17,13 @@ import TournamentDetailScreen from './screens/TournamentDetailScreen';
 import AddTournamentScreen from './screens/AddTournamentScreen';
 import AdminStaffRequestsScreen from './screens/AdminStaffRequestsScreen';
 import ProfileScreen from './screens/ProfileScreen';
-import StartTournamentScreen from './screens/StartTournamentScreen'; // ⬅️ NEW
+import StartTournamentScreen from './screens/StartTournamentScreen';
 
 // ⬇️ context (no require cycle)
 import { AuthContext } from './context/AuthContext';
+
+// ⬇️ import theme
+import theme from './theme';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -28,9 +33,15 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerTitleAlign: 'center',
-        tabBarActiveTintColor: '#111827',
-        tabBarInactiveTintColor: '#6b7280',
-        tabBarStyle: { height: 58, paddingBottom: 6 },
+        headerStyle: { backgroundColor: '#FFFFFF' },
+        headerTitleStyle: {
+          fontFamily: theme.fonts.heading, // Montserrat-Bold
+          color: theme.colors.primary,     // Gimmel green
+          letterSpacing: 2,
+        },
+        tabBarActiveTintColor: theme.colors.primary,
+        tabBarInactiveTintColor: theme.colors.grey,
+        tabBarStyle: { height: 58, paddingBottom: 6, backgroundColor: theme.colors.backgroundLight },
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
           if (route.name === 'Home') {
@@ -42,7 +53,7 @@ function MainTabs() {
         },
       })}
     >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'Poker Tournament App' }} />
+      <Tab.Screen name="Home" component={HomeScreen} options={{ title: 'GIMMEL' }} />
       <Tab.Screen name="Profile" component={ProfileScreen} options={{ title: 'Profile' }} />
     </Tab.Navigator>
   );
@@ -51,6 +62,12 @@ function MainTabs() {
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [checking, setChecking] = useState(true);
+
+  // ⬇️ load fonts
+  let [fontsLoaded] = useFonts({
+    'Montserrat-Bold': require('./assets/fonts/Montserrat-Bold.ttf'),
+    'Nunito-Regular': require('./assets/fonts/Nunito-Regular.ttf'),
+  });
 
   useEffect(() => {
     (async () => {
@@ -63,7 +80,14 @@ export default function App() {
   const signIn = () => setIsLoggedIn(true);
   const signOut = () => setIsLoggedIn(false);
 
-  if (checking) return null;
+  // ⬇️ show spinner until fonts + login check are ready
+  if (checking || !fontsLoaded) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
 
   return (
     <AuthContext.Provider value={{ isLoggedIn, signIn, signOut }}>
@@ -93,7 +117,7 @@ export default function App() {
                 options={{ title: 'Tournament Details' }}
               />
               <Stack.Screen
-                name="StartTournament" // ⬅️ NEW
+                name="StartTournament"
                 component={StartTournamentScreen}
                 options={{ title: 'Tournament Clock' }}
               />

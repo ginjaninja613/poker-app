@@ -1,23 +1,24 @@
 {
   "expo": {
-    "name": "poker-app-frontend",
-    "slug": "poker-app-frontend",
+    "name": "Gimmel",
+    "slug": "gimmel",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icons/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
-    "ios": {
-      "supportsTablet": true
+    "splash": {
+      "image": "./assets/splash/splash_light.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/icons/icon.png",
+        "backgroundColor": "#2E5B43"
       }
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "ios": {
+      "supportsTablet": true
     }
   }
 }

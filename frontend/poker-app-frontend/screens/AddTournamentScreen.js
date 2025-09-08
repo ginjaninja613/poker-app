@@ -1,3 +1,4 @@
+// frontend/poker-app-frontend/screens/AddTournamentScreen.js
 import React, { useState } from 'react';
 import {
   View, Text, TextInput, Button, StyleSheet, ScrollView, Alert,
@@ -38,7 +39,7 @@ export default function AddTournamentScreen({ route, navigation }) {
   const [gameType, setGameType] = useState('No Limit Hold’em');
   const [notes, setNotes] = useState('');
 
-  // Stack & prize pool (RESTORED)
+  // Stack & prize pool
   const [startingStack, setStartingStack] = useState('');
   const [prizePool, setPrizePool] = useState('');
 
@@ -50,6 +51,9 @@ export default function AddTournamentScreen({ route, navigation }) {
   // Bounty
   const [isBounty, setIsBounty] = useState(false);
   const [bountyAmount, setBountyAmount] = useState('');
+
+  // NEW: Late Registration (levels)
+  const [lateRegLevels, setLateRegLevels] = useState(''); // number of levels
 
   // Multi-day
   const [isMultiDay, setIsMultiDay] = useState(false);
@@ -64,7 +68,7 @@ export default function AddTournamentScreen({ route, navigation }) {
   const [draftDayInputs, setDraftDayInputs] = useState({}); // { [index]: { level, ante, duration } }
 
   // Global structure
-  const [structure, setStructure] = useState([]); // [{ smallBlind,bigBlind,ante?,duration } or { level:'Break',duration }]
+  const [structure, setStructure] = useState([]);
   const [newLevel, setNewLevel] = useState('');
   const [newAnte, setNewAnte] = useState('');
   const [newDuration, setNewDuration] = useState('');
@@ -143,14 +147,17 @@ export default function AddTournamentScreen({ route, navigation }) {
         : { level: idx + 1, smallBlind: Number(s.smallBlind) || 0, bigBlind: Number(s.bigBlind) || 0, ante: Number(s.ante) || 0, durationMinutes: Number(s.duration) || 0, isBreak: false }
     );
 
-  const payloadDays = () =>
-    isMultiDay
+  // ⬇️ IMPORTANT: for multi-day, write structure into each day when "use same structure" is on
+  const payloadDays = () => {
+    const global = normalizeStructure(structure);
+    return isMultiDay
       ? days.map((d, i) => ({
           label: d.label,
           startTimeUTC: d.startTime.toISOString(),
-          structure: useSameStructure ? [] : normalizeStructure(dayStructures[i] || []),
+          structure: useSameStructure ? global : normalizeStructure(dayStructures[i] || []),
         }))
       : [];
+  };
 
   const computeDateTimeUTC = () => {
     if (!isMultiDay || days.length === 0) return date.toISOString();
@@ -169,16 +176,22 @@ export default function AddTournamentScreen({ route, navigation }) {
       dateTimeUTC: computeDateTimeUTC(),
       buyIn: Number(buyIn),
       rake: Number(rake),
-      prizePool: prizePool ? Number(prizePool) || 0 : 0, // RESTORED
+      prizePool: prizePool ? Number(prizePool) || 0 : 0,
       gameType,
       notes: notes.trim(),
-      startingStack: startingStack ? Number(startingStack) || 0 : 0, // RESTORED
+      startingStack: startingStack ? Number(startingStack) || 0 : 0,
       reEntry: allowReEntry || unlimitedReEntry,
       reEntryUnlimited: unlimitedReEntry,
       reEntryCount: unlimitedReEntry ? 0 : (Number(reentriesAllowed) || 0),
-      lateRegLevels: 0,
+
+      // NEW: send late registration levels as a number
+      lateRegLevels: lateRegLevels ? Number(lateRegLevels) || 0 : 0,
+
       bounty: isBounty ? Number(bountyAmount) || 0 : 0,
-      structure: useSameStructure ? normalizeStructure(structure) : [],
+
+      // Root structure still sent (useful for back-compat & server guard)
+      structure: normalizeStructure(structure),
+
       days: payloadDays(),
       status: 'scheduled',
     };
@@ -257,6 +270,15 @@ export default function AddTournamentScreen({ route, navigation }) {
             )}
           </>
         )}
+
+        {/* NEW: Late Registration */}
+        <Text style={styles.section}>⏱ Late Registration</Text>
+        <NumericInput
+          style={styles.input}
+          placeholder="Late reg lasts for (levels)"
+          value={lateRegLevels}
+          onChangeText={setLateRegLevels}
+        />
 
         <Text style={styles.section}>🏆 Bounty</Text>
         <View style={styles.row}>

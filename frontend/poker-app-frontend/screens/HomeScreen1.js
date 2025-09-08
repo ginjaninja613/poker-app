@@ -12,6 +12,8 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
+import theme from '../theme';
 
 const API_BASE = 'http://192.168.0.178:5000'; // update if your backend IP changes
 
@@ -197,16 +199,20 @@ export default function HomeScreen({ navigation }) {
     return (
       <TouchableOpacity
         style={styles.row}
+        activeOpacity={0.85}
         onPress={() =>
           navigation.navigate('CasinoDetail', {
             casinoId: id,
             casinoName: name,
-            casino: item, // ⬅️ pass the full casino object for screens that expect route.params.casino._id
+            casino: item, // ⬅️ pass the full casino object
           })
         }
       >
-        <Text style={styles.rowTitle}>{name}</Text>
-        {subtitle ? <Text style={styles.rowSub}>{subtitle}</Text> : null}
+        <View style={styles.rowLeft}>
+          <Text style={styles.rowTitle}>{name}</Text>
+          {subtitle ? <Text style={styles.rowSub}>{subtitle}</Text> : null}
+        </View>
+        <Ionicons name="chevron-forward" size={20} color="#FFFFFF" />
       </TouchableOpacity>
     );
   };
@@ -214,7 +220,7 @@ export default function HomeScreen({ navigation }) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
+        <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.muted}>Loading casinos…</Text>
       </View>
     );
@@ -241,22 +247,43 @@ export default function HomeScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8fafc' },
+  container: { flex: 1, backgroundColor: theme.colors.backgroundLight },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  muted: { marginTop: 8, color: '#6b7280' },
-  error: { padding: 12, color: '#b91c1c', textAlign: 'center' },
+  muted: { marginTop: 8, color: theme.colors.grey, fontFamily: theme.fonts.body },
+  error: {
+    padding: 12,
+    color: '#b91c1c',
+    textAlign: 'center',
+    fontFamily: theme.fonts.body,
+  },
+
+  // LIST ROW (green)
   row: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.primary,
     marginHorizontal: 12,
     marginVertical: 8,
     padding: 16,
     borderRadius: 14,
-    elevation: 2,
+    elevation: 3,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  rowTitle: { fontSize: 18, fontWeight: '700', color: '#111827' },
-  rowSub: { marginTop: 4, color: '#6b7280' },
+  rowLeft: { flexShrink: 1, paddingRight: 10 },
+  rowTitle: {
+    fontSize: 18,
+    color: '#FFFFFF',
+    fontFamily: theme.fonts.heading,
+  },
+  rowSub: {
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: theme.fonts.body,
+  },
 });

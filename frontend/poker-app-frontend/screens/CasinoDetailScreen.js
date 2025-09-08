@@ -5,12 +5,13 @@ import {
   Text,
   FlatList,
   StyleSheet,
-  Button,
   ActivityIndicator,
   ScrollView,
   TouchableOpacity,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
+import theme from '../theme';
 
 const API_BASE = 'http://192.168.0.178:5000';
 
@@ -23,12 +24,15 @@ function getId(objOrId) {
 
 // Compute "Scheduled in Xh" only if within 24h
 function computeScheduledLabel(tournament) {
-  const soonestUTC = Array.isArray(tournament?.days) && tournament.days.length
-    ? tournament.days
-        .map(d => new Date(d.startTimeUTC).getTime())
-        .filter(n => !isNaN(n))
-        .sort((a,b)=>a-b)[0]
-    : (tournament?.dateTimeUTC ? new Date(tournament.dateTimeUTC).getTime() : null);
+  const soonestUTC =
+    Array.isArray(tournament?.days) && tournament.days.length
+      ? tournament.days
+          .map((d) => new Date(d.startTimeUTC).getTime())
+          .filter((n) => !isNaN(n))
+          .sort((a, b) => a - b)[0]
+      : tournament?.dateTimeUTC
+      ? new Date(tournament.dateTimeUTC).getTime()
+      : null;
   if (!soonestUTC) return null;
   const now = Date.now();
   const dt = soonestUTC - now;
@@ -44,10 +48,7 @@ export default function CasinoDetailScreen({ route, navigation }) {
   const { casino: casinoParam, casinoId: casinoIdParam, casinoName: casinoNameParam } = route.params || {};
 
   // Stable casino id (does NOT change when we call setData)
-  const idToUse = useMemo(
-    () => getId(casinoParam) || getId(casinoIdParam),
-    [casinoParam, casinoIdParam]
-  );
+  const idToUse = useMemo(() => getId(casinoParam) || getId(casinoIdParam), [casinoParam, casinoIdParam]);
 
   const [data, setData] = useState(casinoParam || null); // prefer the object if provided
   const [tournaments, setTournaments] = useState([]); // separate state (not on casino)
@@ -62,15 +63,23 @@ export default function CasinoDetailScreen({ route, navigation }) {
     if (!id) return casinoParam || null;
     const res = await fetch(`${API_BASE}/api/casinos/${id}`);
     const text = await res.text();
-    try { return text ? JSON.parse(text) : (casinoParam || null); } catch { return casinoParam || null; }
+    try {
+      return text ? JSON.parse(text) : casinoParam || null;
+    } catch {
+      return casinoParam || null;
+    }
   };
 
   const fetchTournaments = async (id) => {
     if (!id) return [];
     const res = await fetch(`${API_BASE}/api/casinos/${id}/tournaments`);
     const text = await res.text();
-    try { const list = text ? JSON.parse(text) : []; return Array.isArray(list) ? list : []; }
-    catch { return []; }
+    try {
+      const list = text ? JSON.parse(text) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
   };
 
   const fetchMe = async () => {
@@ -153,28 +162,35 @@ export default function CasinoDetailScreen({ route, navigation }) {
     const id = t?._id || t?.id || t?.tournamentId;
     const live = id ? liveMap[id] : null;
 
+    const scheduled = !live?.status ? computeScheduledLabel(t) : null;
+
     if (live && live.status) {
       const label =
-        live.status === 'running' ? 'Running'
-        : live.status === 'paused' ? 'Paused'
-        : live.status === 'completed' ? 'Completed'
-        : '—';
-      const pillStyle =
-        live.status === 'running' ? styles.pillRunning
-        : live.status === 'paused' ? styles.pillPaused
-        : styles.pillCompleted;
+        live.status === 'running'
+          ? 'Running'
+          : live.status === 'paused'
+          ? 'Paused'
+          : live.status === 'completed'
+          ? 'Completed'
+          : '—';
+      const textStyle =
+        live.status === 'running'
+          ? styles.pillTextRunning
+          : live.status === 'paused'
+          ? styles.pillTextPaused
+          : styles.pillTextCompleted;
+
       return (
-        <View style={[styles.pill, pillStyle]}>
-          <Text style={styles.pillText}>{label}</Text>
+        <View style={[styles.pill, styles.pillWhite]}>
+          <Text style={[styles.pillTextBase, textStyle]}>{label}</Text>
         </View>
       );
     }
 
-    const scheduled = computeScheduledLabel(t);
     if (scheduled) {
       return (
-        <View style={[styles.pill, styles.pillScheduled]}>
-          <Text style={styles.pillText}>{scheduled}</Text>
+        <View style={[styles.pill, styles.pillWhite]}>
+          <Text style={[styles.pillTextBase, styles.pillTextScheduled]}>{scheduled}</Text>
         </View>
       );
     }
@@ -185,41 +201,42 @@ export default function CasinoDetailScreen({ route, navigation }) {
   const renderTournament = ({ item }) => (
     <TouchableOpacity
       style={styles.previewCard}
+      activeOpacity={0.9}
       onPress={() =>
         navigation.navigate('TournamentDetail', {
           tournament: JSON.parse(JSON.stringify(item)),
-          casinoName: (data?.name || casinoNameParam || ''),
+          casinoName: data?.name || casinoNameParam || '',
           casinoId: idToUse,
         })
       }
     >
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+      <View style={styles.cardHeader}>
         <Text style={styles.title}>{item?.name || 'Tournament'}</Text>
-        {renderStatusPill(item)}
+        <View style={styles.cardHeaderRight}>
+          {renderStatusPill(item)}
+          <Ionicons name="chevron-forward" size={20} color="#FFFFFF" style={{ marginLeft: 8 }} />
+        </View>
       </View>
+
       <Text style={styles.line}>Buy-In: £{item?.buyIn ?? 0} + £{item?.rake ?? 0}</Text>
       <Text style={styles.line}>
         Start: {item?.dateTimeUTC ? new Date(item.dateTimeUTC).toLocaleString() : '—'}
       </Text>
-      {typeof item?.prizePool === 'number' && (
-        <Text style={styles.line}>Prize Pool: £{item.prizePool}</Text>
-      )}
+      {typeof item?.prizePool === 'number' && <Text style={styles.line}>Prize Pool: £{item.prizePool}</Text>}
     </TouchableOpacity>
   );
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" />
-        <Text>Loading casino details...</Text>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+        <Text style={styles.muted}>Loading casino details...</Text>
       </View>
     );
   }
 
   const casinoIdStr = idToUse;
-  const canAdd =
-    userRole === 'admin' ||
-    (userRole === 'staff' && assignedIds.includes(String(casinoIdStr)));
+  const canAdd = userRole === 'admin' || (userRole === 'staff' && assignedIds.includes(String(casinoIdStr)));
 
   const dataSafe = data || {};
   const listSafe = Array.isArray(tournaments) ? tournaments : [];
@@ -228,18 +245,21 @@ export default function CasinoDetailScreen({ route, navigation }) {
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.headerBox}>
         <Text style={styles.header}>{dataSafe.name || casinoNameParam || 'Casino'}</Text>
-        <Text style={styles.address}>
-          {typeof dataSafe.address === 'string' ? dataSafe.address : ''}
-        </Text>
+        <Text style={styles.address}>{typeof dataSafe.address === 'string' ? dataSafe.address : ''}</Text>
       </View>
 
       {canAdd && (
         <View style={styles.buttonWrapper}>
-          <Button
-            title="➕ Add Tournament"
+          <TouchableOpacity
+            style={styles.addButton}
             onPress={() => navigation.navigate('AddTournament', { casinoId: casinoIdStr })}
-            color="#2196F3"
-          />
+            activeOpacity={0.9}
+          >
+            <View style={styles.addButtonInner}>
+              <Ionicons name="add" size={20} color="#111827" />
+              <Text style={styles.addButtonText}>Add Tournament</Text>
+            </View>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -260,70 +280,122 @@ export default function CasinoDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: {
     padding: 16,
-    backgroundColor: '#f9f9f9',
+    backgroundColor: theme.colors.backgroundLight,
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  muted: { marginTop: 8, color: theme.colors.grey, fontFamily: theme.fonts.body },
+
   headerBox: {
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 10,
+    borderRadius: 16,
     marginBottom: 12,
     elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    borderWidth: 1,
+    borderColor: 'rgba(46,91,67,0.08)', // subtle green tint
   },
   header: {
     fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
+    color: '#111827',
     marginBottom: 4,
+    fontFamily: theme.fonts.heading, // Montserrat-Bold
   },
   address: {
     fontSize: 14,
-    color: '#666',
+    color: theme.colors.grey,
+    fontFamily: theme.fonts.body, // Nunito-Regular
   },
-  buttonWrapper: {
-    marginBottom: 16,
+
+  buttonWrapper: { marginBottom: 16 },
+  addButton: {
+    backgroundColor: theme.colors.accent, // GOLD to stand out from green cards
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
+  addButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  addButtonText: {
+    color: '#111827', // dark text on gold for readability
+    fontSize: 16,
+    marginLeft: 8,
+    fontFamily: theme.fonts.heading,
+  },
+
   noTournaments: {
     fontStyle: 'italic',
-    color: '#666',
+    color: theme.colors.grey,
     textAlign: 'center',
     marginTop: 20,
+    fontFamily: theme.fonts.body,
   },
+
+  // TOURNAMENT BUTTON (now green)
   previewCard: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.colors.primary, // Gimmel green
     padding: 16,
-    borderRadius: 10,
+    borderRadius: 14,
     marginBottom: 12,
     elevation: 2,
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.06)',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  cardHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   title: {
     fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 6,
+    color: '#FFFFFF',
+    fontFamily: theme.fonts.heading,
   },
   line: {
     fontSize: 14,
-    color: '#444',
+    color: 'rgba(255,255,255,0.92)',
+    fontFamily: theme.fonts.body,
   },
 
-  // Status pills
+  // Status pills — white bg + status-colored text
   pill: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
     alignSelf: 'flex-start',
   },
-  pillText: { color: '#fff', fontWeight: '800', fontSize: 12 },
-  pillRunning: { backgroundColor: '#16a34a' },
-  pillPaused: { backgroundColor: '#f59e0b' },
-  pillCompleted: { backgroundColor: '#6b7280' },
-  pillScheduled: { backgroundColor: '#2563eb' },
+  pillWhite: {
+    backgroundColor: '#FFFFFF',
+  },
+  pillTextBase: {
+    fontSize: 12,
+    fontFamily: theme.fonts.heading,
+  },
+  pillTextRunning: { color: theme.colors.primary },
+  pillTextPaused: { color: theme.colors.accent },
+  pillTextCompleted: { color: '#6b7280' },
+  pillTextScheduled: { color: theme.colors.primary },
 });
